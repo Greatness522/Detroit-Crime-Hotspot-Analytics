@@ -68,14 +68,16 @@ Interactive maps identify geographic concentrations of reported incidents.
 
 Users can narrow the analysis by precinct and crime category to examine where particular types of activity are concentrated.
 
-### 3. Spike Severity Analysis
+Spatial indexing is used to aggregate incidents into comparable geographic cells, allowing concentrations and changes to be evaluated consistently across locations.
 
+### 3. Spike Severity Analysis
+![Spike Severity Choropleth](Images/Spike_Severity.png)
 The project distinguishes general incident concentration from unusual short-term increases.
 
-Spike analysis helps identify locations experiencing activity above their recent expected pattern rather than simply identifying locations that historically have high incident volumes.
+This distinction helps separate persistent high-volume areas from locations experiencing a recent abnormal increase, providing a more useful signal for short-term operational review.
 
 ### 4. Temporal Analysis
-
+![Temporal Analysis](Images/OpenTemporal_Analysis.png)
 Incident activity is examined across:
 
 - Day of week
@@ -135,14 +137,18 @@ The project includes:
 
 Using the matched reporting period currently represented in the dashboard:
 
-- **197,768** total incidents are represented across 2024–2026.
-- **26,090** incidents are recorded in the 2026 matched-YTD period.
-- 2026 matched-YTD incidents are approximately **7.1% lower than 2025** for the equivalent reporting period.
+- **223,076** total incidents are represented across 2024–2026.
+- **51,398** incidents are recorded in the 2026 matched-YTD period.
+- 2026 matched-YTD incidents are approximately **4.6% lower than 2025** for the equivalent reporting period.
 - Precinct-level trends differ from the overall citywide pattern, making precinct-specific analysis important.
 
-The current matched-YTD reporting window runs through **May 10, 2026**.
+The current matched-YTD reporting window runs through August 17, 2026. The analytical pipeline is designed to refresh the dashboard and derived outputs as newer source data becomes available and the analysis is rerun.
 
----
+## Project Development
+
+This project was developed end-to-end in Python, combining data preparation, temporal analysis, geospatial analysis, hotspot detection, interactive visualization, and dashboard generation.
+
+The workflow transforms incident-level records into precinct-level operational summaries and interactive analytical outputs. Python is used to clean and structure the data, calculate matched-period comparisons, identify spatial and temporal patterns, generate visualizations, and produce the HTML dashboard and supporting analytical files.
 
 ## Technology Stack
 
@@ -171,7 +177,7 @@ The current matched-YTD reporting window runs through **May 10, 2026**.
 
 **Location:** Detroit, Michigan  
 **Period:** 2024–2026  
-**Current matched-YTD endpoint:** May 10, 2026
+**Current matched-YTD endpoint:** August 17, 2026
 
 The project analyzes reported crime incidents across Detroit police precincts using geographic, temporal, categorical, and historical dimensions.
 
