@@ -2,6 +2,8 @@ name: Refresh Detroit Crime Dashboard
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 10 * * *"  # Runs every day at 10 AM UTC
 
 jobs:
   refresh-dashboard:
@@ -21,3 +23,15 @@ jobs:
           echo "Repository loaded successfully"
           pwd
           find . -maxdepth 2 -type f | sort
+      - name: Install download dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas requests
+
+      - name: Download latest 2026 Detroit crime data
+        run: |
+          python Python/download_2026_data.py
+
+      - name: Verify 2026 dataset
+        run: |
+          ls -lh Dataset/RMS_Crime_Incidents_2026.csv    
