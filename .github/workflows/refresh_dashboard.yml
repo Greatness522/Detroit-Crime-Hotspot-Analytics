@@ -34,4 +34,11 @@ jobs:
 
       - name: Verify 2026 dataset
         run: |
-          ls -lh Dataset/RMS_Crime_Incidents_2026.csv    
+          ls -lh Dataset/RMS_Crime_Incidents_2026.csv  
+      - name: Install analysis dependencies
+        run: |
+          pip install numpy pandas matplotlib seaborn folium scikit-learn
+
+      - name: Run crime hotspot analysis
+        run: |
+          python Python/analyze_crime_hotspots.py      
