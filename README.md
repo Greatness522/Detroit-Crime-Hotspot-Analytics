@@ -5,6 +5,7 @@ An interactive crime analytics and operational decision-support project examinin
 ### 🔗 Live Dashboard
 **[Open Detroit Crime Operations Dashboard](https://greatness522.github.io/Detroit-Crime-Hotspot-Analytics/)**
 
+![Detroit Crime Operations Dashboard](Images/dashboard_overview.png)
 ---
 
 ## Project Overview
@@ -86,6 +87,7 @@ Incident activity is examined across:
 This helps identify when particular crime patterns are most concentrated.
 
 ### 5. Hotspot Persistence & Change
+![Hotspot Change Detection](Images/hotspot_changes.png)
 
 Hotspots are evaluated across time to distinguish between locations that remain consistently active and locations whose patterns are changing.
 
@@ -97,6 +99,10 @@ This supports identification of:
 - Shifting concentrations
 
 ### 6. Priority & Emerging Concerns
+![Priority and Emerging Concerns](Images/priority_emerging_concerns.png)
+
+The dashboard identifies offenses requiring attention using recent 28-day
+movement, comparison, YTD direction, and priority signals.
 
 Recent activity, historical patterns, crime categories, and geographic signals are combined to identify patterns that may deserve additional review.
 
