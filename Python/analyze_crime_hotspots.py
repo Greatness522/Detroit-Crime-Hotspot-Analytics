@@ -4790,7 +4790,12 @@ def main() -> None:
         map_filename=combined_dashboard_html.name,
         out_path=operations_overview_html,
     )
-
+    # Keep GitHub Pages homepage synchronized with the latest operations overview.
+    index_html = BASE_DIR / "index.html"
+    index_html.write_text(
+        operations_overview_html.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     save_combined_interactive_dashboard(
         df,
         weekly,
