@@ -4793,8 +4793,9 @@ def main() -> None:
     # Keep GitHub Pages homepage synchronized with the latest operations overview.
     index_html = BASE_DIR / "index.html"
     homepage_html = operations_overview_html.read_text(encoding="utf-8")
-    homepage_html = homepage_html.replace("../Images/", "/Images/")
-    homepage_html = homepage_html.replace("./Images/", "/Images/")
+    homepage_html = homepage_html.replace("../Images/", "Images/")
+    homepage_html = homepage_html.replace("./Images/", "Images/")
+    homepage_html = homepage_html.replace("/Images/", "Images/")
     index_html.write_text(
         homepage_html,
         encoding="utf-8",
