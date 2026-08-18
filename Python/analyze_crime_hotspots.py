@@ -56,8 +56,11 @@ def load_data(dataset_dir: Path) -> pd.DataFrame:
 
     df = pd.concat(frames, ignore_index=True)
     df["incident_occurred_at"] = pd.to_datetime(
-        df["incident_occurred_at"], errors="coerce", utc=True
-    )
+    df["incident_occurred_at"],
+    format="mixed",
+    errors="coerce",
+    utc=True,
+)
 
     # Ensure incident_year exists and is consistent for multi-year analysis.
     if "incident_year" not in df.columns:
