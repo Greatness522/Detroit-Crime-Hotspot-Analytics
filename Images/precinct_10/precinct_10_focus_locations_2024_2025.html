@@ -1,0 +1,1074 @@
+<!DOCTYPE html>
+<html>
+<head>
+    
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8" />
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.2/dist/css/bootstrap.min.css"/>
+    <link rel="stylesheet" href="https://netdna.bootstrapcdn.com/bootstrap/3.0.0/css/bootstrap-glyphicons.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.2.0/css/all.min.css"/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css"/>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/python-visualization/folium/folium/templates/leaflet.awesome.rotate.min.css"/>
+    
+            <meta name="viewport" content="width=device-width,
+                initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <style>
+                #map_83536d147dfc65edf9cb97a8d0d3f277 {
+                    position: relative;
+                    width: 100.0%;
+                    height: 100.0%;
+                    left: 0.0%;
+                    top: 0.0%;
+                }
+                .leaflet-container { font-size: 1rem; }
+            </style>
+
+            <style>html, body {
+                width: 100%;
+                height: 100%;
+                margin: 0;
+                padding: 0;
+            }
+            </style>
+
+            <style>#map {
+                position:absolute;
+                top:0;
+                bottom:0;
+                right:0;
+                left:0;
+                }
+            </style>
+
+            <script>
+                L_NO_TOUCH = false;
+                L_DISABLE_3D = false;
+            </script>
+
+        
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/3.5.5/d3.min.js"></script>
+</head>
+<body>
+    
+    
+            <div class="folium-map" id="map_83536d147dfc65edf9cb97a8d0d3f277" ></div>
+        
+</body>
+<script>
+    
+    
+            var map_83536d147dfc65edf9cb97a8d0d3f277 = L.map(
+                "map_83536d147dfc65edf9cb97a8d0d3f277",
+                {
+                    center: [42.385687300693206, -83.12340994462835],
+                    crs: L.CRS.EPSG3857,
+                    ...{
+  "zoom": 11,
+  "zoomControl": true,
+  "preferCanvas": false,
+}
+
+                }
+            );
+
+            
+
+        
+    
+            var tile_layer_d4298e8274647b29faa22d2cc46e05a4 = L.tileLayer(
+                "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+                {
+  "minZoom": 0,
+  "maxZoom": 20,
+  "maxNativeZoom": 20,
+  "noWrap": false,
+  "attribution": "\u0026copy; \u003ca href=\"https://www.openstreetmap.org/copyright\"\u003eOpenStreetMap\u003c/a\u003e contributors \u0026copy; \u003ca href=\"https://carto.com/attributions\"\u003eCARTO\u003c/a\u003e",
+  "subdomains": "abcd",
+  "detectRetina": false,
+  "tms": false,
+  "opacity": 1,
+}
+
+            );
+        
+    
+            tile_layer_d4298e8274647b29faa22d2cc46e05a4.addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+    var color_map_529da3379c56f1a632fafeed1d22d398 = {};
+
+    
+    color_map_529da3379c56f1a632fafeed1d22d398.color = d3.scale.threshold()
+              .domain([0.128535524726685, 0.12908635175014577, 0.1296371787736065, 0.13018800579706727, 0.13073883282052803, 0.13128965984398877, 0.13184048686744954, 0.1323913138909103, 0.13294214091437104, 0.1334929679378318, 0.13404379496129257, 0.1345946219847533, 0.13514544900821407, 0.1356962760316748, 0.13624710305513557, 0.13679793007859634, 0.13734875710205707, 0.13789958412551784, 0.1384504111489786, 0.13900123817243934, 0.1395520651959001, 0.14010289221936087, 0.1406537192428216, 0.14120454626628237, 0.14175537328974314, 0.14230620031320387, 0.14285702733666464, 0.1434078543601254, 0.14395868138358614, 0.1445095084070469, 0.14506033543050767, 0.1456111624539684, 0.14616198947742917, 0.1467128165008899, 0.14726364352435067, 0.14781447054781144, 0.14836529757127218, 0.14891612459473294, 0.1494669516181937, 0.15001777864165444, 0.1505686056651152, 0.15111943268857597, 0.1516702597120367, 0.15222108673549747, 0.15277191375895824, 0.15332274078241898, 0.15387356780587974, 0.1544243948293405, 0.15497522185280124, 0.155526048876262, 0.15607687589972277, 0.1566277029231835, 0.15717852994664427, 0.15772935697010504, 0.15828018399356578, 0.15883101101702654, 0.15938183804048728, 0.15993266506394804, 0.1604834920874088, 0.16103431911086957, 0.1615851461343303, 0.16213597315779107, 0.1626868001812518, 0.16323762720471258, 0.16378845422817334, 0.1643392812516341, 0.16489010827509484, 0.16544093529855558, 0.16599176232201635, 0.1665425893454771, 0.16709341636893787, 0.1676442433923986, 0.16819507041585938, 0.1687458974393201, 0.16929672446278088, 0.16984755148624164, 0.1703983785097024, 0.17094920553316315, 0.1715000325566239, 0.17205085958008465, 0.1726016866035454, 0.17315251362700618, 0.17370334065046691, 0.17425416767392768, 0.17480499469738844, 0.17535582172084918, 0.17590664874430995, 0.1764574757677707, 0.17700830279123145, 0.1775591298146922, 0.17810995683815298, 0.17866078386161371, 0.17921161088507448, 0.17976243790853524, 0.18031326493199598, 0.18086409195545675, 0.18141491897891748, 0.18196574600237825, 0.182516573025839, 0.18306740004929978, 0.18361822707276051, 0.18416905409622128, 0.18471988111968202, 0.18527070814314278, 0.18582153516660355, 0.1863723621900643, 0.18692318921352505, 0.18747401623698579, 0.18802484326044655, 0.18857567028390732, 0.18912649730736808, 0.18967732433082882, 0.19022815135428958, 0.19077897837775032, 0.19132980540121108, 0.19188063242467185, 0.1924314594481326, 0.19298228647159335, 0.19353311349505412, 0.19408394051851485, 0.19463476754197562, 0.19518559456543638, 0.19573642158889715, 0.1962872486123579, 0.19683807563581862, 0.19738890265927939, 0.19793972968274015, 0.19849055670620092, 0.19904138372966168, 0.19959221075312242, 0.20014303777658318, 0.20069386480004392, 0.20124469182350468, 0.20179551884696545, 0.2023463458704262, 0.20289717289388695, 0.2034479999173477, 0.20399882694080845, 0.20454965396426922, 0.20510048098772998, 0.20565130801119075, 0.20620213503465148, 0.20675296205811222, 0.207303789081573, 0.20785461610503375, 0.20840544312849452, 0.20895627015195525, 0.209507097175416, 0.21005792419887676, 0.21060875122233752, 0.21115957824579829, 0.21171040526925905, 0.2122612322927198, 0.21281205931618052, 0.2133628863396413, 0.21391371336310205, 0.21446454038656282, 0.21501536741002356, 0.21556619443348432, 0.21611702145694506, 0.21666784848040582, 0.2172186755038666, 0.21776950252732735, 0.2183203295507881, 0.21887115657424883, 0.2194219835977096, 0.21997281062117036, 0.22052363764463112, 0.22107446466809189, 0.22162529169155262, 0.2221761187150134, 0.22272694573847412, 0.2232777727619349, 0.22382859978539565, 0.2243794268088564, 0.22493025383231716, 0.2254810808557779, 0.22603190787923866, 0.22658273490269942, 0.2271335619261602, 0.22768438894962095, 0.2282352159730817, 0.22878604299654245, 0.2293368700200032, 0.22988769704346396, 0.23043852406692472, 0.23098935109038546, 0.23154017811384622, 0.23209100513730696, 0.23264183216076773, 0.2331926591842285, 0.23374348620768925, 0.23429431323115, 0.23484514025461073, 0.2353959672780715, 0.23594679430153226, 0.23649762132499302, 0.2370484483484538, 0.23759927537191453, 0.23815010239537526, 0.23870092941883603, 0.2392517564422968, 0.23980258346575756, 0.2403534104892183, 0.24090423751267903, 0.2414550645361398, 0.24200589155960056, 0.24255671858306133, 0.2431075456065221, 0.24365837262998283, 0.2442091996534436, 0.24476002667690433, 0.2453108537003651, 0.24586168072382586, 0.2464125077472866, 0.24696333477074736, 0.2475141617942081, 0.24806498881766886, 0.24861581584112963, 0.2491666428645904, 0.24971746988805116, 0.25026829691151187, 0.25081912393497263, 0.2513699509584334, 0.25192077798189416, 0.2524716050053549, 0.2530224320288157, 0.25357325905227646, 0.2541240860757372, 0.25467491309919793, 0.2552257401226587, 0.25577656714611946, 0.25632739416958017, 0.25687822119304093, 0.2574290482165017, 0.25797987523996246, 0.25853070226342323, 0.259081529286884, 0.25963235631034476, 0.2601831833338055, 0.2607340103572663, 0.261284837380727, 0.26183566440418776, 0.2623864914276485, 0.26293731845110924, 0.26348814547457, 0.26403897249803077, 0.26458979952149153, 0.2651406265449523, 0.26569145356841306, 0.2662422805918738, 0.26679310761533453, 0.2673439346387953, 0.26789476166225606, 0.2684455886857168, 0.26899641570917754, 0.2695472427326383, 0.27009806975609907, 0.27064889677955983, 0.2711997238030206, 0.27175055082648136, 0.27230137784994213, 0.2728522048734029, 0.27340303189686366, 0.27395385892032437, 0.27450468594378513, 0.27505551296724584, 0.2756063399907066, 0.27615716701416737, 0.27670799403762814, 0.2772588210610889, 0.27780964808454967, 0.27836047510801043, 0.2789113021314712, 0.2794621291549319, 0.28001295617839267, 0.28056378320185343, 0.28111461022531414, 0.2816654372487749, 0.2822162642722357, 0.28276709129569644, 0.2833179183191572, 0.28386874534261797, 0.28441957236607873, 0.2849703993895395, 0.28552122641300026, 0.28607205343646097, 0.2866228804599217, 0.28717370748338245, 0.2877245345068432, 0.288275361530304, 0.28882618855376474, 0.2893770155772255, 0.28992784260068627, 0.29047866962414703, 0.2910294966476078, 0.29158032367106856, 0.29213115069452933, 0.29268197771799004, 0.2932328047414508, 0.29378363176491157, 0.2943344587883723, 0.29488528581183304, 0.2954361128352938, 0.29598693985875457, 0.29653776688221534, 0.2970885939056761, 0.29763942092913687, 0.2981902479525976, 0.29874107497605834, 0.2992919019995191, 0.2998427290229798, 0.3003935560464406, 0.30094438306990134, 0.3014952100933621, 0.3020460371168229, 0.30259686414028364, 0.3031476911637444, 0.30369851818720517, 0.30424934521066593, 0.3048001722341267, 0.3053509992575874, 0.3059018262810482, 0.30645265330450894, 0.30700348032796965, 0.3075543073514304, 0.3081051343748912, 0.30865596139835194, 0.3092067884218127, 0.30975761544527347, 0.31030844246873424, 0.31085926949219495, 0.3114100965156557, 0.3119609235391165, 0.3125117505625772, 0.31306257758603795, 0.3136134046094987, 0.3141642316329595, 0.31471505865642024, 0.315265885679881, 0.3158167127033418, 0.31636753972680254, 0.3169183667502633, 0.31746919377372407, 0.31802002079718483, 0.3185708478206455, 0.31912167484410625, 0.319672501867567, 0.3202233288910278, 0.32077415591448855, 0.3213249829379493, 0.3218758099614101, 0.32242663698487084, 0.3229774640083316, 0.32352829103179237, 0.3240791180552531, 0.32462994507871384, 0.3251807721021746, 0.3257315991256353, 0.3262824261490961, 0.32683325317255685, 0.3273840801960176, 0.3279349072194784, 0.32848573424293914, 0.3290365612663999, 0.3295873882898606, 0.3301382153133214, 0.33068904233678215, 0.33123986936024286, 0.3317906963837036, 0.3323415234071644, 0.33289235043062515, 0.3334431774540859, 0.3339940044775467, 0.33454483150100744, 0.3350956585244682, 0.335646485547929, 0.33619731257138974, 0.33674813959485045, 0.3372989666183112, 0.337849793641772, 0.33840062066523274, 0.33895144768869345, 0.3395022747121542, 0.340053101735615, 0.34060392875907575, 0.3411547557825365, 0.3417055828059973, 0.342256409829458, 0.34280723685291875, 0.3433580638763795, 0.3439088908998403, 0.344459717923301, 0.34501054494676175, 0.3455613719702225, 0.3461121989936833, 0.34666302601714405, 0.3472138530406048, 0.3477646800640656, 0.34831550708752634, 0.3488663341109871, 0.3494171611344479, 0.3499679881579086, 0.35051881518136935, 0.35106964220483006, 0.3516204692282908, 0.3521712962517516, 0.35272212327521235, 0.3532729502986731, 0.3538237773221339, 0.35437460434559465, 0.3549254313690554, 0.3554762583925161, 0.3560270854159769, 0.35657791243943765, 0.35712873946289836, 0.3576795664863591, 0.3582303935098199, 0.35878122053328065, 0.3593320475567414, 0.3598828745802022, 0.36043370160366295, 0.3609845286271237, 0.3615353556505845, 0.3620861826740452, 0.3626370096975059, 0.36318783672096666, 0.3637386637444274, 0.3642894907678882, 0.36484031779134896, 0.3653911448148097, 0.3659419718382705, 0.36649279886173125, 0.367043625885192, 0.3675944529086528, 0.3681452799321135, 0.36869610695557425, 0.369246933979035, 0.3697977610024958, 0.3703485880259565, 0.37089941504941726, 0.371450242072878, 0.3720010690963388, 0.37255189611979955, 0.3731027231432603, 0.373653550166721, 0.3742043771901818, 0.37475520421364256, 0.3753060312371033, 0.37585685826056403, 0.3764076852840248, 0.37695851230748556, 0.3775093393309463, 0.3780601663544071, 0.37861099337786785, 0.3791618204013286, 0.3797126474247894, 0.3802634744482501, 0.38081430147171086, 0.3813651284951716, 0.3819159555186324, 0.38246678254209315, 0.3830176095655539, 0.3835684365890146, 0.3841192636124754, 0.38467009063593616, 0.3852209176593969, 0.3857717446828577, 0.3863225717063184, 0.3868733987297792, 0.3874242257532399, 0.3879750527767007, 0.38852587980016146, 0.38907670682362216, 0.38962753384708293, 0.3901783608705437, 0.39072918789400446, 0.39128001491746517, 0.391830841940926, 0.3923816689643867, 0.3929324959878475, 0.39348332301130823, 0.394034150034769, 0.39458497705822976, 0.3951358040816905, 0.39568663110515123, 0.39623745812861205, 0.39678828515207276, 0.3973391121755335, 0.3978899391989943, 0.39844076622245506, 0.39899159324591577, 0.3995424202693766, 0.4000932472928373, 0.400644074316298, 0.4011949013397588, 0.40174572836321953, 0.4022965553866803, 0.40284738241014106, 0.40339820943360183])
+              .range(['#fee5d9ff', '#fee5d9ff', '#fee5d8ff', '#fee4d8ff', '#fee4d8ff', '#fee4d7ff', '#fee3d7ff', '#fee3d6ff', '#fee3d6ff', '#fee2d5ff', '#fee2d5ff', '#fee2d5ff', '#fee1d4ff', '#fee1d4ff', '#fee1d3ff', '#fee0d3ff', '#fee0d2ff', '#fee0d2ff', '#fedfd2ff', '#fedfd1ff', '#fedfd1ff', '#feded0ff', '#feded0ff', '#fedecfff', '#feddcfff', '#feddceff', '#feddceff', '#fedcceff', '#fedccdff', '#fedccdff', '#fedbccff', '#fedbccff', '#fedbcbff', '#fedacbff', '#fedacbff', '#fedacaff', '#fed9caff', '#fed9c9ff', '#fed9c9ff', '#fed8c8ff', '#fed8c8ff', '#fed8c8ff', '#fed7c7ff', '#fed7c7ff', '#fed7c6ff', '#fed6c6ff', '#fed6c5ff', '#fed6c5ff', '#fed5c4ff', '#fed5c4ff', '#fed5c4ff', '#fed4c3ff', '#fed4c3ff', '#fed4c2ff', '#fed3c2ff', '#fed3c1ff', '#fed3c1ff', '#fed2c1ff', '#fed2c0ff', '#fed2c0ff', '#fed1bfff', '#fed1bfff', '#fed1beff', '#fed0beff', '#fed0beff', '#fed0bdff', '#fecfbdff', '#fecfbcff', '#fecfbcff', '#fecebbff', '#fecebbff', '#fecebaff', '#fecdbaff', '#fecdbaff', '#fecdb9ff', '#fecdb9ff', '#feccb8ff', '#feccb8ff', '#feccb7ff', '#fecbb7ff', '#fecbb7ff', '#fecbb6ff', '#fecab6ff', '#fdcab5ff', '#fdcab5ff', '#fdc9b4ff', '#fdc9b4ff', '#fdc9b4ff', '#fdc8b3ff', '#fdc8b3ff', '#fdc8b2ff', '#fdc7b2ff', '#fdc7b1ff', '#fdc7b1ff', '#fdc6b1ff', '#fdc6b0ff', '#fdc6b0ff', '#fdc5afff', '#fdc5afff', '#fdc5aeff', '#fdc4aeff', '#fdc4adff', '#fdc4adff', '#fdc3adff', '#fdc3acff', '#fdc3acff', '#fdc2abff', '#fdc2abff', '#fdc2aaff', '#fdc1aaff', '#fdc1aaff', '#fdc1a9ff', '#fdc0a9ff', '#fdc0a8ff', '#fdc0a8ff', '#fdbfa7ff', '#fdbfa7ff', '#fdbfa7ff', '#fdbea6ff', '#fdbea6ff', '#fdbea5ff', '#fdbda5ff', '#fdbda4ff', '#fdbda4ff', '#fdbca3ff', '#fdbca3ff', '#fdbca3ff', '#fdbba2ff', '#fdbba2ff', '#fdbba1ff', '#fdbaa1ff', '#fdbaa0ff', '#fdbaa0ff', '#fdb9a0ff', '#fdb99fff', '#fdb99fff', '#fdb89eff', '#fdb89eff', '#fdb89dff', '#fdb79dff', '#fdb79dff', '#fdb79cff', '#fdb69cff', '#fdb69bff', '#fdb69bff', '#fdb59aff', '#fdb59aff', '#fdb599ff', '#fdb499ff', '#fdb499ff', '#fdb498ff', '#fdb398ff', '#fdb397ff', '#fdb397ff', '#fdb296ff', '#fdb296ff', '#fdb296ff', '#fdb195ff', '#fdb195ff', '#fdb194ff', '#fdb094ff', '#fdb093ff', '#fdb093ff', '#fdaf93ff', '#fdaf92ff', '#fdaf92ff', '#fcae91ff', '#fcae91ff', '#fcad90ff', '#fcad90ff', '#fcad8fff', '#fcac8fff', '#fcac8fff', '#fcab8eff', '#fcab8eff', '#fcab8dff', '#fcaa8dff', '#fcaa8cff', '#fca98cff', '#fca98cff', '#fca98bff', '#fca88bff', '#fca88aff', '#fca78aff', '#fca789ff', '#fca789ff', '#fca689ff', '#fca688ff', '#fca588ff', '#fca587ff', '#fca487ff', '#fca486ff', '#fca486ff', '#fca386ff', '#fca385ff', '#fca285ff', '#fca284ff', '#fca284ff', '#fca183ff', '#fca183ff', '#fca083ff', '#fca082ff', '#fca082ff', '#fc9f81ff', '#fc9f81ff', '#fc9e80ff', '#fc9e80ff', '#fc9d80ff', '#fc9d7fff', '#fc9d7fff', '#fc9c7eff', '#fc9c7eff', '#fc9b7dff', '#fc9b7dff', '#fc9b7dff', '#fc9a7cff', '#fc9a7cff', '#fc997bff', '#fc997bff', '#fc997aff', '#fc987aff', '#fc987aff', '#fc9779ff', '#fc9779ff', '#fc9778ff', '#fc9678ff', '#fc9677ff', '#fc9577ff', '#fc9577ff', '#fc9476ff', '#fc9476ff', '#fc9475ff', '#fc9375ff', '#fc9375ff', '#fc9274ff', '#fc9274ff', '#fc9273ff', '#fc9173ff', '#fc9172ff', '#fc9072ff', '#fc9072ff', '#fc9071ff', '#fc8f71ff', '#fc8f70ff', '#fc8e70ff', '#fc8e6fff', '#fc8d6fff', '#fc8d6fff', '#fc8d6eff', '#fc8c6eff', '#fc8c6dff', '#fc8b6dff', '#fc8b6cff', '#fc8b6cff', '#fc8a6cff', '#fc8a6bff', '#fc896bff', '#fc896aff', '#fc896aff', '#fc8869ff', '#fc8869ff', '#fc8769ff', '#fc8768ff', '#fc8768ff', '#fc8667ff', '#fc8667ff', '#fc8566ff', '#fc8566ff', '#fc8466ff', '#fc8465ff', '#fc8465ff', '#fc8364ff', '#fc8364ff', '#fc8263ff', '#fc8263ff', '#fc8263ff', '#fc8162ff', '#fc8162ff', '#fc8061ff', '#fc8061ff', '#fc8060ff', '#fc7f60ff', '#fc7f60ff', '#fc7e5fff', '#fc7e5fff', '#fc7d5eff', '#fc7d5eff', '#fc7d5dff', '#fc7c5dff', '#fc7c5dff', '#fc7b5cff', '#fc7b5cff', '#fc7b5bff', '#fc7a5bff', '#fc7a5aff', '#fc795aff', '#fc795aff', '#fc7959ff', '#fc7859ff', '#fc7858ff', '#fc7758ff', '#fc7757ff', '#fc7757ff', '#fc7657ff', '#fc7656ff', '#fc7556ff', '#fc7555ff', '#fc7455ff', '#fc7454ff', '#fc7454ff', '#fc7354ff', '#fc7353ff', '#fc7253ff', '#fc7252ff', '#fc7252ff', '#fc7151ff', '#fc7151ff', '#fc7051ff', '#fc7050ff', '#fc7050ff', '#fc6f4fff', '#fc6f4fff', '#fc6e4eff', '#fc6e4eff', '#fc6d4eff', '#fc6d4dff', '#fc6d4dff', '#fc6c4cff', '#fc6c4cff', '#fc6b4bff', '#fc6b4bff', '#fb6b4bff', '#fb6a4aff', '#fb6a4aff', '#fb6949ff', '#fb6949ff', '#fb6849ff', '#fa6849ff', '#fa6748ff', '#fa6748ff', '#f96648ff', '#f96648ff', '#f96547ff', '#f86547ff', '#f86447ff', '#f86446ff', '#f86346ff', '#f76346ff', '#f76246ff', '#f76245ff', '#f66145ff', '#f66145ff', '#f66045ff', '#f66044ff', '#f55f44ff', '#f55f44ff', '#f55e43ff', '#f45e43ff', '#f45d43ff', '#f45d43ff', '#f45c42ff', '#f35c42ff', '#f35b42ff', '#f35b42ff', '#f25a41ff', '#f25a41ff', '#f25941ff', '#f25940ff', '#f15840ff', '#f15840ff', '#f15740ff', '#f0573fff', '#f0563fff', '#f0563fff', '#f0553fff', '#ef553eff', '#ef543eff', '#ef543eff', '#ee533dff', '#ee533dff', '#ee523dff', '#ed523dff', '#ed513cff', '#ed513cff', '#ed513cff', '#ec503cff', '#ec503bff', '#ec4f3bff', '#eb4f3bff', '#eb4e3aff', '#eb4e3aff', '#eb4d3aff', '#ea4d3aff', '#ea4c39ff', '#ea4c39ff', '#e94b39ff', '#e94b39ff', '#e94a38ff', '#e94a38ff', '#e84938ff', '#e84938ff', '#e84837ff', '#e74837ff', '#e74737ff', '#e74736ff', '#e74636ff', '#e64636ff', '#e64536ff', '#e64535ff', '#e54435ff', '#e54435ff', '#e54335ff', '#e54334ff', '#e44234ff', '#e44234ff', '#e44133ff', '#e34133ff', '#e34033ff', '#e34033ff', '#e23f32ff', '#e23f32ff', '#e23e32ff', '#e23e32ff', '#e13d31ff', '#e13d31ff', '#e13c31ff', '#e03c30ff', '#e03b30ff', '#e03b30ff', '#e03a30ff', '#df3a2fff', '#df392fff', '#df392fff', '#de382fff', '#de382eff', '#de372eff', '#de372eff', '#dd362dff', '#dd362dff', '#dd352dff', '#dc352dff', '#dc342cff', '#dc342cff', '#dc332cff', '#db332cff', '#db322bff', '#db322bff', '#da312bff', '#da312aff', '#da302aff', '#d9302aff', '#d92f2aff', '#d92f29ff', '#d92e29ff', '#d82e29ff', '#d82d29ff', '#d82d28ff', '#d72c28ff', '#d72c28ff', '#d72b27ff', '#d72b27ff', '#d62a27ff', '#d62a27ff', '#d62926ff', '#d52926ff', '#d52826ff', '#d52826ff', '#d52725ff', '#d42725ff', '#d42625ff', '#d42624ff', '#d32524ff', '#d32524ff', '#d32424ff', '#d32423ff', '#d22323ff', '#d22323ff', '#d22223ff', '#d12222ff', '#d12122ff', '#d12122ff', '#d12122ff', '#d02021ff', '#d02021ff', '#d01f21ff', '#cf1f20ff', '#cf1e20ff', '#cf1e20ff', '#ce1d20ff', '#ce1d1fff', '#ce1c1fff', '#ce1c1fff', '#cd1b1fff', '#cd1b1eff', '#cd1a1eff', '#cc1a1eff', '#cc191dff', '#cc191dff', '#cc181dff', '#cb181dff']);
+    
+
+    color_map_529da3379c56f1a632fafeed1d22d398.x = d3.scale.linear()
+              .domain([0.128535524726685, 0.40339820943360183])
+              .range([0, 450 - 50]);
+
+    color_map_529da3379c56f1a632fafeed1d22d398.legend = L.control({position: 'topright'});
+    color_map_529da3379c56f1a632fafeed1d22d398.legend.onAdd = function (map) {var div = L.DomUtil.create('div', 'legend'); return div};
+    color_map_529da3379c56f1a632fafeed1d22d398.legend.addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+
+    color_map_529da3379c56f1a632fafeed1d22d398.xAxis = d3.svg.axis()
+        .scale(color_map_529da3379c56f1a632fafeed1d22d398.x)
+        .orient("top")
+        .tickSize(1)
+        .tickValues([0.128535524726685, 0.22015641962899063, 0.3117773145312962, 0.40339820943360183]);
+
+    color_map_529da3379c56f1a632fafeed1d22d398.svg = d3.select(".legend.leaflet-control").append("svg")
+        .attr("id", 'legend')
+        .attr("width", 450)
+        .attr("height", 40);
+
+    color_map_529da3379c56f1a632fafeed1d22d398.g = color_map_529da3379c56f1a632fafeed1d22d398.svg.append("g")
+        .attr("class", "key")
+        .attr("fill", "black")
+        .attr("transform", "translate(25,16)");
+
+    color_map_529da3379c56f1a632fafeed1d22d398.g.selectAll("rect")
+        .data(color_map_529da3379c56f1a632fafeed1d22d398.color.range().map(function(d, i) {
+          return {
+            x0: i ? color_map_529da3379c56f1a632fafeed1d22d398.x(color_map_529da3379c56f1a632fafeed1d22d398.color.domain()[i - 1]) : color_map_529da3379c56f1a632fafeed1d22d398.x.range()[0],
+            x1: i < color_map_529da3379c56f1a632fafeed1d22d398.color.domain().length ? color_map_529da3379c56f1a632fafeed1d22d398.x(color_map_529da3379c56f1a632fafeed1d22d398.color.domain()[i]) : color_map_529da3379c56f1a632fafeed1d22d398.x.range()[1],
+            z: d
+          };
+        }))
+      .enter().append("rect")
+        .attr("height", 40 - 30)
+        .attr("x", function(d) { return d.x0; })
+        .attr("width", function(d) { return d.x1 - d.x0; })
+        .style("fill", function(d) { return d.z; });
+
+    color_map_529da3379c56f1a632fafeed1d22d398.g.call(color_map_529da3379c56f1a632fafeed1d22d398.xAxis).append("text")
+        .attr("class", "caption")
+        .attr("y", 21)
+        .attr("fill", "black")
+        .text("Operational priority score");
+    
+            var circle_marker_9cc5a0d7de3b07810628f827c687cd19 = L.circleMarker(
+                [42.36679265109, -83.0825902706376],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#cb181dff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_e35abaa08eb9f1c027853c7aa0d7838b = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_96e47bbddf0243374d5d3d67b8f4bd4f = $(`<div id="html_96e47bbddf0243374d5d3d67b8f4bd4f" style="width: 100.0%; height: 100.0%;">Focus Rank: 1<br>Precinct: 10<br>Neighborhood: Virginia Park Community<br>Nearest Intersection: W Grand Blvd & Lincoln St<br>Incidents: 380<br>Dominant Crime: LARCENY (99)<br>Dominant Share: 26.1%<br>Mean Spike Z: 0.56<br>Priority Score: 0.403</div>`)[0];
+                popup_e35abaa08eb9f1c027853c7aa0d7838b.setContent(html_96e47bbddf0243374d5d3d67b8f4bd4f);
+            
+        
+
+        circle_marker_9cc5a0d7de3b07810628f827c687cd19.bindPopup(popup_e35abaa08eb9f1c027853c7aa0d7838b)
+        ;
+
+        
+    
+    
+            var circle_marker_5610e53e18f160494b962ec7b95d8292 = L.circleMarker(
+                [42.3905824068496, -83.1308670005748],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fca587ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_d6386c8aa47a4a5424a75fa1d83bb509 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_c9f1d920d40d377be0d17ea0676a4f36 = $(`<div id="html_c9f1d920d40d377be0d17ea0676a4f36" style="width: 100.0%; height: 100.0%;">Focus Rank: 2<br>Precinct: 10<br>Neighborhood: Oakman Blvd Community<br>Nearest Intersection: Clements St & Dexter Ave<br>Incidents: 220<br>Dominant Crime: ASSAULT (55)<br>Dominant Share: 25.0%<br>Mean Spike Z: 0.31<br>Priority Score: 0.233</div>`)[0];
+                popup_d6386c8aa47a4a5424a75fa1d83bb509.setContent(html_c9f1d920d40d377be0d17ea0676a4f36);
+            
+        
+
+        circle_marker_5610e53e18f160494b962ec7b95d8292.bindPopup(popup_d6386c8aa47a4a5424a75fa1d83bb509)
+        ;
+
+        
+    
+    
+            var circle_marker_4a728da2829a5448a2efad8852d90212 = L.circleMarker(
+                [42.3568081616441, -83.1105133991049],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fcab8eff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_b4e09faef9d4e1e17bf16e5d4c200fa7 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_86bbb8228800e50a3204c41df4650441 = $(`<div id="html_86bbb8228800e50a3204c41df4650441" style="width: 100.0%; height: 100.0%;">Focus Rank: 3<br>Precinct: 10<br>Neighborhood: Petoskey-Otsego<br>Nearest Intersection: W I 96 Service Drive & W Grand Blvd<br>Incidents: 184<br>Dominant Crime: ASSAULT (33)<br>Dominant Share: 17.9%<br>Mean Spike Z: 0.80<br>Priority Score: 0.224</div>`)[0];
+                popup_b4e09faef9d4e1e17bf16e5d4c200fa7.setContent(html_86bbb8228800e50a3204c41df4650441);
+            
+        
+
+        circle_marker_4a728da2829a5448a2efad8852d90212.bindPopup(popup_b4e09faef9d4e1e17bf16e5d4c200fa7)
+        ;
+
+        
+    
+    
+            var circle_marker_96e7bc9cda79dabe664f3181e9fab641 = L.circleMarker(
+                [42.3654193445508, -83.0865316698795],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fdb194ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 16, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_a4be62260a6f1028fbc4eda67a4df885 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_30877c84d8702e26771a9181b8cbd9d4 = $(`<div id="html_30877c84d8702e26771a9181b8cbd9d4" style="width: 100.0%; height: 100.0%;">Focus Rank: 4<br>Precinct: 10<br>Neighborhood: Elijah McCoy<br>Nearest Intersection: W Grand Blvd & Poe St<br>Incidents: 87<br>Dominant Crime: LARCENY (24)<br>Dominant Share: 27.6%<br>Mean Spike Z: 2.38<br>Priority Score: 0.216</div>`)[0];
+                popup_a4be62260a6f1028fbc4eda67a4df885.setContent(html_30877c84d8702e26771a9181b8cbd9d4);
+            
+        
+
+        circle_marker_96e7bc9cda79dabe664f3181e9fab641.bindPopup(popup_a4be62260a6f1028fbc4eda67a4df885)
+        ;
+
+        
+    
+    
+            var circle_marker_e5c5e3889b929cb00ec29dd151ca8f56 = L.circleMarker(
+                [42.3886209069811, -83.1190511153516],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fdb99fff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_6201b86aa8bc9fde31199c9c016fbf63 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_fafe57be0ea1c5cf1376ea7ec91c68d1 = $(`<div id="html_fafe57be0ea1c5cf1376ea7ec91c68d1" style="width: 100.0%; height: 100.0%;">Focus Rank: 5<br>Precinct: 10<br>Neighborhood: Dexter-Linwood<br>Nearest Intersection: Fullerton St & Linwood St<br>Incidents: 160<br>Dominant Crime: FRAUD (30)<br>Dominant Share: 18.8%<br>Mean Spike Z: 0.82<br>Priority Score: 0.202</div>`)[0];
+                popup_6201b86aa8bc9fde31199c9c016fbf63.setContent(html_fafe57be0ea1c5cf1376ea7ec91c68d1);
+            
+        
+
+        circle_marker_e5c5e3889b929cb00ec29dd151ca8f56.bindPopup(popup_6201b86aa8bc9fde31199c9c016fbf63)
+        ;
+
+        
+    
+    
+            var circle_marker_9003633aac59a1562bda04249d6e8fc3 = L.circleMarker(
+                [42.3942925025788, -83.1191281603438],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fdbaa1ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_36fbd10834ddcbea7b93efcf39bbc0ed = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_7744ba2d21287db24d30ac82d998577f = $(`<div id="html_7744ba2d21287db24d30ac82d998577f" style="width: 100.0%; height: 100.0%;">Focus Rank: 6<br>Precinct: 10<br>Neighborhood: Oakman Blvd Community<br>Nearest Intersection: Indiandale St & W Davison St<br>Incidents: 182<br>Dominant Crime: FRAUD (41)<br>Dominant Share: 22.5%<br>Mean Spike Z: 0.39<br>Priority Score: 0.200</div>`)[0];
+                popup_36fbd10834ddcbea7b93efcf39bbc0ed.setContent(html_7744ba2d21287db24d30ac82d998577f);
+            
+        
+
+        circle_marker_9003633aac59a1562bda04249d6e8fc3.bindPopup(popup_36fbd10834ddcbea7b93efcf39bbc0ed)
+        ;
+
+        
+    
+    
+            var circle_marker_8569fd6ceeb687c5f82ba47477b36f45 = L.circleMarker(
+                [42.3930241529527, -83.1220144248074],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fdc1aaff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_433f21b7c58e8dd3ff38f503c2a055b1 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_52c1089d8b356f6626839878b4852c19 = $(`<div id="html_52c1089d8b356f6626839878b4852c19" style="width: 100.0%; height: 100.0%;">Focus Rank: 7<br>Precinct: 10<br>Neighborhood: Dexter-Linwood<br>Nearest Intersection: Linwood St & W Davison St<br>Incidents: 180<br>Dominant Crime: FRAUD (42)<br>Dominant Share: 23.3%<br>Mean Spike Z: 0.22<br>Priority Score: 0.188</div>`)[0];
+                popup_433f21b7c58e8dd3ff38f503c2a055b1.setContent(html_52c1089d8b356f6626839878b4852c19);
+            
+        
+
+        circle_marker_8569fd6ceeb687c5f82ba47477b36f45.bindPopup(popup_433f21b7c58e8dd3ff38f503c2a055b1)
+        ;
+
+        
+    
+    
+            var circle_marker_be081c913edac02360e7e451ba2cce5f = L.circleMarker(
+                [42.3865092491895, -83.1393947620837],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fdc4aeff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_10f57676fb99c9c17047bee01f580a45 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_f6ae55eb9c42b6edc096be7443609548 = $(`<div id="html_f6ae55eb9c42b6edc096be7443609548" style="width: 100.0%; height: 100.0%;">Focus Rank: 8<br>Precinct: 10<br>Neighborhood: Oakman Blvd Community<br>Nearest Intersection: Livernois Ave & Waverly<br>Incidents: 156<br>Dominant Crime: ASSAULT (23)<br>Dominant Share: 14.7%<br>Mean Spike Z: 0.55<br>Priority Score: 0.183</div>`)[0];
+                popup_10f57676fb99c9c17047bee01f580a45.setContent(html_f6ae55eb9c42b6edc096be7443609548);
+            
+        
+
+        circle_marker_be081c913edac02360e7e451ba2cce5f.bindPopup(popup_10f57676fb99c9c17047bee01f580a45)
+        ;
+
+        
+    
+    
+            var circle_marker_542a1c12e78bc6750de9717acd55ddff = L.circleMarker(
+                [42.3707817079612, -83.117174555493],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fdc7b1ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_262a78500854c40c1b51156416563916 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_69fe4bd86aee9e8ffc361e9e9091c17d = $(`<div id="html_69fe4bd86aee9e8ffc361e9e9091c17d" style="width: 100.0%; height: 100.0%;">Focus Rank: 9<br>Precinct: 10<br>Neighborhood: Petoskey-Otsego<br>Nearest Intersection: Dexter Ave & Joy Rd<br>Incidents: 147<br>Dominant Crime: FRAUD (42)<br>Dominant Share: 28.6%<br>Mean Spike Z: 0.65<br>Priority Score: 0.180</div>`)[0];
+                popup_262a78500854c40c1b51156416563916.setContent(html_69fe4bd86aee9e8ffc361e9e9091c17d);
+            
+        
+
+        circle_marker_542a1c12e78bc6750de9717acd55ddff.bindPopup(popup_262a78500854c40c1b51156416563916)
+        ;
+
+        
+    
+    
+            var circle_marker_253e166504e2b2a9c35e8528a5465fef = L.circleMarker(
+                [42.3761550554237, -83.1391061714307],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#feccb7ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_231c5f1eca0e913ad10312fe83c9879d = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_38132b92ac242029149c37c2c16187bb = $(`<div id="html_38132b92ac242029149c37c2c16187bb" style="width: 100.0%; height: 100.0%;">Focus Rank: 10<br>Precinct: 10<br>Neighborhood: Nardin Park<br>Nearest Intersection: Elmhurst St & Livernois Ave<br>Incidents: 139<br>Dominant Crime: ASSAULT (34)<br>Dominant Share: 24.5%<br>Mean Spike Z: 0.64<br>Priority Score: 0.171</div>`)[0];
+                popup_231c5f1eca0e913ad10312fe83c9879d.setContent(html_38132b92ac242029149c37c2c16187bb);
+            
+        
+
+        circle_marker_253e166504e2b2a9c35e8528a5465fef.bindPopup(popup_231c5f1eca0e913ad10312fe83c9879d)
+        ;
+
+        
+    
+    
+            var circle_marker_a2c1dbb0cc586e6cee80ede47c1e5330 = L.circleMarker(
+                [42.3874258518293, -83.1349367321407],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fecdb9ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_7eddd340bcea2acee70a3ab05f413d38 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_6fcbcdd539ee8be6ce5a0039257eda0c = $(`<div id="html_6fcbcdd539ee8be6ce5a0039257eda0c" style="width: 100.0%; height: 100.0%;">Focus Rank: 11<br>Precinct: 10<br>Neighborhood: Russell Woods<br>Nearest Intersection: Petoskey Ave & W Davison St<br>Incidents: 148<br>Dominant Crime: ASSAULT (36)<br>Dominant Share: 24.3%<br>Mean Spike Z: 0.43<br>Priority Score: 0.169</div>`)[0];
+                popup_7eddd340bcea2acee70a3ab05f413d38.setContent(html_6fcbcdd539ee8be6ce5a0039257eda0c);
+            
+        
+
+        circle_marker_a2c1dbb0cc586e6cee80ede47c1e5330.bindPopup(popup_7eddd340bcea2acee70a3ab05f413d38)
+        ;
+
+        
+    
+    
+            var circle_marker_ac98f825e2d95b06661da68c98ccd61f = L.circleMarker(
+                [42.3792605327456, -83.140300134081],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fecfbdff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_62f96a32df9b77599aa671b63cf37a93 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_046e8bfe5cfd29d8928a0b77ed365789 = $(`<div id="html_046e8bfe5cfd29d8928a0b77ed365789" style="width: 100.0%; height: 100.0%;">Focus Rank: 12<br>Precinct: 10<br>Neighborhood: Oakman Blvd Community<br>Nearest Intersection: Herbert St & Livernois Ave<br>Incidents: 153<br>Dominant Crime: ASSAULT (32)<br>Dominant Share: 20.9%<br>Mean Spike Z: 0.27<br>Priority Score: 0.165</div>`)[0];
+                popup_62f96a32df9b77599aa671b63cf37a93.setContent(html_046e8bfe5cfd29d8928a0b77ed365789);
+            
+        
+
+        circle_marker_ac98f825e2d95b06661da68c98ccd61f.bindPopup(popup_62f96a32df9b77599aa671b63cf37a93)
+        ;
+
+        
+    
+    
+            var circle_marker_061ad52bcb1ca373eeb85db468f92333 = L.circleMarker(
+                [42.3633102510717, -83.1026801791687],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fed1beff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 12, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_bcd57042683a84004d174c4ca68e6959 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_582d90133c9bb63bea29f0a097a0d18d = $(`<div id="html_582d90133c9bb63bea29f0a097a0d18d" style="width: 100.0%; height: 100.0%;">Focus Rank: 13<br>Precinct: 10<br>Neighborhood: Wildemere Park<br>Nearest Intersection: Columbus St & Lawton St<br>Incidents: 50<br>Dominant Crime: ASSAULT (12)<br>Dominant Share: 24.0%<br>Mean Spike Z: 2.07<br>Priority Score: 0.163</div>`)[0];
+                popup_bcd57042683a84004d174c4ca68e6959.setContent(html_582d90133c9bb63bea29f0a097a0d18d);
+            
+        
+
+        circle_marker_061ad52bcb1ca373eeb85db468f92333.bindPopup(popup_bcd57042683a84004d174c4ca68e6959)
+        ;
+
+        
+    
+    
+            var circle_marker_960147e6519400b4c115becc21c16b65 = L.circleMarker(
+                [42.3687090022666, -83.1125330908017],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fed2bfff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 15, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_b07548c0adbd87fafd588196b0b43a15 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_af040bf6b164b73498e6b1f76d41bca2 = $(`<div id="html_af040bf6b164b73498e6b1f76d41bca2" style="width: 100.0%; height: 100.0%;">Focus Rank: 14<br>Precinct: 10<br>Neighborhood: Jamison<br>Nearest Intersection: Wildemere St & Carter St<br>Incidents: 73<br>Dominant Crime: ASSAULT (23)<br>Dominant Share: 31.5%<br>Mean Spike Z: 1.64<br>Priority Score: 0.162</div>`)[0];
+                popup_b07548c0adbd87fafd588196b0b43a15.setContent(html_af040bf6b164b73498e6b1f76d41bca2);
+            
+        
+
+        circle_marker_960147e6519400b4c115becc21c16b65.bindPopup(popup_b07548c0adbd87fafd588196b0b43a15)
+        ;
+
+        
+    
+    
+            var circle_marker_423b71a3a64cce5546752510db572157 = L.circleMarker(
+                [42.3697335528948, -83.0855800200117],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fed3c1ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_61d7f1508b0f481c697b3a472363a0d2 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_8a1041c5ea6ad158cf3cc0aff2a15826 = $(`<div id="html_8a1041c5ea6ad158cf3cc0aff2a15826" style="width: 100.0%; height: 100.0%;">Focus Rank: 15<br>Precinct: 10<br>Neighborhood: Virginia Park Community<br>Nearest Intersection: Pallister St & Bethune St<br>Incidents: 121<br>Dominant Crime: ASSAULT (26)<br>Dominant Share: 21.5%<br>Mean Spike Z: 0.73<br>Priority Score: 0.159</div>`)[0];
+                popup_61d7f1508b0f481c697b3a472363a0d2.setContent(html_8a1041c5ea6ad158cf3cc0aff2a15826);
+            
+        
+
+        circle_marker_423b71a3a64cce5546752510db572157.bindPopup(popup_61d7f1508b0f481c697b3a472363a0d2)
+        ;
+
+        
+    
+    
+            var circle_marker_4c6a26f231cb5247f9e2995a85e97dd0 = L.circleMarker(
+                [42.3879967160894, -83.1039766889552],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fed3c2ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_d69b51c0110226895a6d65a3e89dd9fc = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_ce109ac134593d90e02e49c87f5b917e = $(`<div id="html_ce109ac134593d90e02e49c87f5b917e" style="width: 100.0%; height: 100.0%;">Focus Rank: 16<br>Precinct: 10<br>Neighborhood: Dexter-Linwood<br>Nearest Intersection: Woodrow Wilson St & Tuxedo St<br>Incidents: 143<br>Dominant Crime: ASSAULT (60)<br>Dominant Share: 42.0%<br>Mean Spike Z: 0.33<br>Priority Score: 0.158</div>`)[0];
+                popup_d69b51c0110226895a6d65a3e89dd9fc.setContent(html_ce109ac134593d90e02e49c87f5b917e);
+            
+        
+
+        circle_marker_4c6a26f231cb5247f9e2995a85e97dd0.bindPopup(popup_d69b51c0110226895a6d65a3e89dd9fc)
+        ;
+
+        
+    
+    
+            var circle_marker_bb51c88bd6981c04e7b579e8444dde4e = L.circleMarker(
+                [42.3938526187366, -83.1235753875846],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fed5c5ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_9a3024d1dbd9a767b2fce27fdcb40078 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_539a2e5542167a245e050039333abe11 = $(`<div id="html_539a2e5542167a245e050039333abe11" style="width: 100.0%; height: 100.0%;">Focus Rank: 17<br>Precinct: 10<br>Neighborhood: Oakman Blvd Community<br>Nearest Intersection: Clements St & Linwood St<br>Incidents: 149<br>Dominant Crime: ASSAULT (43)<br>Dominant Share: 28.9%<br>Mean Spike Z: 0.16<br>Priority Score: 0.155</div>`)[0];
+                popup_9a3024d1dbd9a767b2fce27fdcb40078.setContent(html_539a2e5542167a245e050039333abe11);
+            
+        
+
+        circle_marker_bb51c88bd6981c04e7b579e8444dde4e.bindPopup(popup_9a3024d1dbd9a767b2fce27fdcb40078)
+        ;
+
+        
+    
+    
+            var circle_marker_a4c94807c1d6628a6e2eecdda841ef63 = L.circleMarker(
+                [42.3773213176787, -83.1228892752819],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fed7c6ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_0c4cc7c786901df3d1062c851195bfd3 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_2a8ef83743292c88c03472af335461c3 = $(`<div id="html_2a8ef83743292c88c03472af335461c3" style="width: 100.0%; height: 100.0%;">Focus Rank: 18<br>Precinct: 10<br>Neighborhood: Nardin Park<br>Nearest Intersection: Dexter Ave & Collingwood St<br>Incidents: 134<br>Dominant Crime: ASSAULT (21)<br>Dominant Share: 15.7%<br>Mean Spike Z: 0.39<br>Priority Score: 0.153</div>`)[0];
+                popup_0c4cc7c786901df3d1062c851195bfd3.setContent(html_2a8ef83743292c88c03472af335461c3);
+            
+        
+
+        circle_marker_a4c94807c1d6628a6e2eecdda841ef63.bindPopup(popup_0c4cc7c786901df3d1062c851195bfd3)
+        ;
+
+        
+    
+    
+            var circle_marker_7301ee475ef81db3e8c33b10d21e02dd = L.circleMarker(
+                [42.3686727344939, -83.1387893011821],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fed9caff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_225f063c3441324e092492625cd31de0 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_d08e20b254bdbcda919c107c05142925 = $(`<div id="html_d08e20b254bdbcda919c107c05142925" style="width: 100.0%; height: 100.0%;">Focus Rank: 19<br>Precinct: 10<br>Neighborhood: Nardin Park<br>Nearest Intersection: Grand River Ave & Livernois Ave<br>Incidents: 129<br>Dominant Crime: ASSAULT (32)<br>Dominant Share: 24.8%<br>Mean Spike Z: 0.40<br>Priority Score: 0.148</div>`)[0];
+                popup_225f063c3441324e092492625cd31de0.setContent(html_d08e20b254bdbcda919c107c05142925);
+            
+        
+
+        circle_marker_7301ee475ef81db3e8c33b10d21e02dd.bindPopup(popup_225f063c3441324e092492625cd31de0)
+        ;
+
+        
+    
+    
+            var circle_marker_a909832b9636f4c3f4c289d856707332 = L.circleMarker(
+                [42.3761084622142, -83.1416101120653],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fedbcbff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_72446d8f9474c650966bc72666b7b68e = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_cb4c910e9bf47d7a2e7ceb272fcf6d52 = $(`<div id="html_cb4c910e9bf47d7a2e7ceb272fcf6d52" style="width: 100.0%; height: 100.0%;">Focus Rank: 20<br>Precinct: 10<br>Neighborhood: Oakman Blvd Community<br>Nearest Intersection: Monica St & Tuxedo St<br>Incidents: 138<br>Dominant Crime: ASSAULT (33)<br>Dominant Share: 23.9%<br>Mean Spike Z: 0.20<br>Priority Score: 0.146</div>`)[0];
+                popup_72446d8f9474c650966bc72666b7b68e.setContent(html_cb4c910e9bf47d7a2e7ceb272fcf6d52);
+            
+        
+
+        circle_marker_a909832b9636f4c3f4c289d856707332.bindPopup(popup_72446d8f9474c650966bc72666b7b68e)
+        ;
+
+        
+    
+    
+            var circle_marker_0217009013eca6ddfebde885d9dfdf85 = L.circleMarker(
+                [42.3749964089453, -83.0976539907022],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fedbcbff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_53e3c11099b5c095642ab701478c926b = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_79eca7804783f6f7c4c6fcd01f9fc230 = $(`<div id="html_79eca7804783f6f7c4c6fcd01f9fc230" style="width: 100.0%; height: 100.0%;">Focus Rank: 21<br>Precinct: 10<br>Neighborhood: Virginia Park Community<br>Nearest Intersection: Gladstone St & Rosa Parks Blvd<br>Incidents: 125<br>Dominant Crime: ASSAULT (40)<br>Dominant Share: 32.0%<br>Mean Spike Z: 0.43<br>Priority Score: 0.146</div>`)[0];
+                popup_53e3c11099b5c095642ab701478c926b.setContent(html_79eca7804783f6f7c4c6fcd01f9fc230);
+            
+        
+
+        circle_marker_0217009013eca6ddfebde885d9dfdf85.bindPopup(popup_53e3c11099b5c095642ab701478c926b)
+        ;
+
+        
+    
+    
+            var circle_marker_0621ceeeea46be6f8a94c5dd5f779997 = L.circleMarker(
+                [42.3811259751843, -83.1425570583137],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fedccdff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_1a758a82c0d2f7da350ef6ffb71033b8 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_5a32a3189de6cce5870dda3a5af6c52c = $(`<div id="html_5a32a3189de6cce5870dda3a5af6c52c" style="width: 100.0%; height: 100.0%;">Focus Rank: 22<br>Precinct: 10<br>Neighborhood: Oakman Blvd Community<br>Nearest Intersection: Fullerton St & Ewald Cir<br>Incidents: 129<br>Dominant Crime: ASSAULT (35)<br>Dominant Share: 27.1%<br>Mean Spike Z: 0.33<br>Priority Score: 0.145</div>`)[0];
+                popup_1a758a82c0d2f7da350ef6ffb71033b8.setContent(html_5a32a3189de6cce5870dda3a5af6c52c);
+            
+        
+
+        circle_marker_0621ceeeea46be6f8a94c5dd5f779997.bindPopup(popup_1a758a82c0d2f7da350ef6ffb71033b8)
+        ;
+
+        
+    
+    
+            var circle_marker_fbf142b7bc881b9ce21610345edf9b04 = L.circleMarker(
+                [42.3861065828762, -83.1579896269295],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fedecfff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 17, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_6abb005daead853549fe6a06b51fadc1 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_06baadabe3253836e7138bdf66728202 = $(`<div id="html_06baadabe3253836e7138bdf66728202" style="width: 100.0%; height: 100.0%;">Focus Rank: 23<br>Precinct: 10<br>Neighborhood: Davison-Schoolcraft<br>Nearest Intersection: W Davison St & Kentucky St<br>Incidents: 93<br>Dominant Crime: ASSAULT (21)<br>Dominant Share: 22.6%<br>Mean Spike Z: 0.92<br>Priority Score: 0.142</div>`)[0];
+                popup_6abb005daead853549fe6a06b51fadc1.setContent(html_06baadabe3253836e7138bdf66728202);
+            
+        
+
+        circle_marker_fbf142b7bc881b9ce21610345edf9b04.bindPopup(popup_6abb005daead853549fe6a06b51fadc1)
+        ;
+
+        
+    
+    
+            var circle_marker_e25f784106b269a65f68812771e472d9 = L.circleMarker(
+                [42.3707504533895, -83.1134738137743],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#feded0ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 13, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_217a242ba4dd5b3d5c869e5e1075784f = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_a9696e91e7f82596649421a29b3f8dff = $(`<div id="html_a9696e91e7f82596649421a29b3f8dff" style="width: 100.0%; height: 100.0%;">Focus Rank: 24<br>Precinct: 10<br>Neighborhood: Jamison<br>Nearest Intersection: Wildemere St & Clairmount St<br>Incidents: 56<br>Dominant Crime: DAMAGE TO PROPERTY (12)<br>Dominant Share: 21.4%<br>Mean Spike Z: 1.56<br>Priority Score: 0.141</div>`)[0];
+                popup_217a242ba4dd5b3d5c869e5e1075784f.setContent(html_a9696e91e7f82596649421a29b3f8dff);
+            
+        
+
+        circle_marker_e25f784106b269a65f68812771e472d9.bindPopup(popup_217a242ba4dd5b3d5c869e5e1075784f)
+        ;
+
+        
+    
+    
+            var circle_marker_797a76e4ec3491b4a40d1ad5d1e62577 = L.circleMarker(
+                [42.3817445957975, -83.0847668736954],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#feded0ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 9, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_44522b223caab7668703fb37b89f7bd0 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_26e2212057861b4f1b55236891fb2498 = $(`<div id="html_26e2212057861b4f1b55236891fb2498" style="width: 100.0%; height: 100.0%;">Focus Rank: 25<br>Precinct: 10<br>Neighborhood: Piety Hill<br>Nearest Intersection: Clairmount St & 2nd Blvd<br>Incidents: 29<br>Dominant Crime: AGGRAVATED ASSAULT (5)<br>Dominant Share: 17.2%<br>Mean Spike Z: 2.04<br>Priority Score: 0.140</div>`)[0];
+                popup_44522b223caab7668703fb37b89f7bd0.setContent(html_26e2212057861b4f1b55236891fb2498);
+            
+        
+
+        circle_marker_797a76e4ec3491b4a40d1ad5d1e62577.bindPopup(popup_44522b223caab7668703fb37b89f7bd0)
+        ;
+
+        
+    
+    
+            var circle_marker_d937c3c9455f991bf458f9fe28588b2c = L.circleMarker(
+                [42.3921001603604, -83.1360136912454],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fedfd1ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_766aa227f0e0a1cd451eeb781c2a62d9 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_08153729d7edff33b8650f03c1250ce9 = $(`<div id="html_08153729d7edff33b8650f03c1250ce9" style="width: 100.0%; height: 100.0%;">Focus Rank: 26<br>Precinct: 10<br>Neighborhood: Oakman Blvd Community<br>Nearest Intersection: Holmur St & Ewald Cir<br>Incidents: 122<br>Dominant Crime: ASSAULT (33)<br>Dominant Share: 27.0%<br>Mean Spike Z: 0.37<br>Priority Score: 0.140</div>`)[0];
+                popup_766aa227f0e0a1cd451eeb781c2a62d9.setContent(html_08153729d7edff33b8650f03c1250ce9);
+            
+        
+
+        circle_marker_d937c3c9455f991bf458f9fe28588b2c.bindPopup(popup_766aa227f0e0a1cd451eeb781c2a62d9)
+        ;
+
+        
+    
+    
+            var circle_marker_125d4353fa4dd0c6c7eb3bac25fc8b50 = L.circleMarker(
+                [42.3989359961118, -83.1330700223734],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee0d2ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 14, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_3fb479522b9bcbf593a30a5484824c63 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_6e148396efda5d278770327560b3edfa = $(`<div id="html_6e148396efda5d278770327560b3edfa" style="width: 100.0%; height: 100.0%;">Focus Rank: 27<br>Precinct: 10<br>Neighborhood: Dexter-Fenkell<br>Nearest Intersection: Wildemere St & Bourke St<br>Incidents: 63<br>Dominant Crime: ASSAULT (15)<br>Dominant Share: 23.8%<br>Mean Spike Z: 1.38<br>Priority Score: 0.138</div>`)[0];
+                popup_3fb479522b9bcbf593a30a5484824c63.setContent(html_6e148396efda5d278770327560b3edfa);
+            
+        
+
+        circle_marker_125d4353fa4dd0c6c7eb3bac25fc8b50.bindPopup(popup_3fb479522b9bcbf593a30a5484824c63)
+        ;
+
+        
+    
+    
+            var circle_marker_43004c530ac87290977ed63f85d8566f = L.circleMarker(
+                [42.400441288384, -83.1402622325944],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee0d2ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 16, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_2a8efbb34c1bc1447b96de18f8ce1fbb = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_4b00a47fe2b8dfd6b061318ce9c43e8d = $(`<div id="html_4b00a47fe2b8dfd6b061318ce9c43e8d" style="width: 100.0%; height: 100.0%;">Focus Rank: 28<br>Precinct: 10<br>Neighborhood: Chalfonte<br>Nearest Intersection: Chalfonte St & Santa Rosa Dr<br>Incidents: 86<br>Dominant Crime: ASSAULT (23)<br>Dominant Share: 26.7%<br>Mean Spike Z: 0.97<br>Priority Score: 0.137</div>`)[0];
+                popup_2a8efbb34c1bc1447b96de18f8ce1fbb.setContent(html_4b00a47fe2b8dfd6b061318ce9c43e8d);
+            
+        
+
+        circle_marker_43004c530ac87290977ed63f85d8566f.bindPopup(popup_2a8efbb34c1bc1447b96de18f8ce1fbb)
+        ;
+
+        
+    
+    
+            var circle_marker_9e257cf7e910ffdf9f0f1d0c3c7f5d34 = L.circleMarker(
+                [42.3987963165099, -83.1389608548218],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee0d3ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 17, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_f7a09febd70d1bc492d0db0fe1656bd1 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_1b8607b20e6922861916332ac9328459 = $(`<div id="html_1b8607b20e6922861916332ac9328459" style="width: 100.0%; height: 100.0%;">Focus Rank: 29<br>Precinct: 10<br>Neighborhood: Dexter-Fenkell<br>Nearest Intersection: Eaton St & Livernois Ave<br>Incidents: 91<br>Dominant Crime: FRAUD (23)<br>Dominant Share: 25.3%<br>Mean Spike Z: 0.87<br>Priority Score: 0.137</div>`)[0];
+                popup_f7a09febd70d1bc492d0db0fe1656bd1.setContent(html_1b8607b20e6922861916332ac9328459);
+            
+        
+
+        circle_marker_9e257cf7e910ffdf9f0f1d0c3c7f5d34.bindPopup(popup_f7a09febd70d1bc492d0db0fe1656bd1)
+        ;
+
+        
+    
+    
+            var circle_marker_5b9b2fb19b04c529ecc4f3e400cb4f11 = L.circleMarker(
+                [42.3917730997448, -83.1541972937422],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee1d4ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 14, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_83b1ff01da199ba8f63097e087e537e2 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_f3e9e74dbf8b21a4af09053dbf6ced67 = $(`<div id="html_f3e9e74dbf8b21a4af09053dbf6ced67" style="width: 100.0%; height: 100.0%;">Focus Rank: 30<br>Precinct: 10<br>Neighborhood: Davison-Schoolcraft<br>Nearest Intersection: Cherrylawn St & Intervale St<br>Incidents: 67<br>Dominant Crime: ASSAULT (17)<br>Dominant Share: 25.4%<br>Mean Spike Z: 1.26<br>Priority Score: 0.135</div>`)[0];
+                popup_83b1ff01da199ba8f63097e087e537e2.setContent(html_f3e9e74dbf8b21a4af09053dbf6ced67);
+            
+        
+
+        circle_marker_5b9b2fb19b04c529ecc4f3e400cb4f11.bindPopup(popup_83b1ff01da199ba8f63097e087e537e2)
+        ;
+
+        
+    
+    
+            var circle_marker_65be8f90ebb7a948a6e8cf76a200abab = L.circleMarker(
+                [42.3886186204285, -83.0856281508702],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee2d4ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 15, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_f131811035e79b0d78bf82cec47cb8a6 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_5eccffd1fc2d84873648aded3f795e64 = $(`<div id="html_5eccffd1fc2d84873648aded3f795e64" style="width: 100.0%; height: 100.0%;">Focus Rank: 31<br>Precinct: 10<br>Neighborhood: Gateway Community<br>Nearest Intersection: Glynn Ct & Woodward Ave<br>Incidents: 78<br>Dominant Crime: LARCENY (18)<br>Dominant Share: 23.1%<br>Mean Spike Z: 1.06<br>Priority Score: 0.135</div>`)[0];
+                popup_f131811035e79b0d78bf82cec47cb8a6.setContent(html_5eccffd1fc2d84873648aded3f795e64);
+            
+        
+
+        circle_marker_65be8f90ebb7a948a6e8cf76a200abab.bindPopup(popup_f131811035e79b0d78bf82cec47cb8a6)
+        ;
+
+        
+    
+    
+            var circle_marker_9961f8602a0c4265f28b0671e33bf050 = L.circleMarker(
+                [42.3836740355962, -83.1162016453004],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee2d5ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_78742017fdba030f5482a2e63029c23d = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_0f1eb71ffb7c22f8ba4148c346cd8df4 = $(`<div id="html_0f1eb71ffb7c22f8ba4148c346cd8df4" style="width: 100.0%; height: 100.0%;">Focus Rank: 32<br>Precinct: 10<br>Neighborhood: Dexter-Linwood<br>Nearest Intersection: Elmhurst St & Linwood St<br>Incidents: 103<br>Dominant Crime: ASSAULT (32)<br>Dominant Share: 31.1%<br>Mean Spike Z: 0.61<br>Priority Score: 0.134</div>`)[0];
+                popup_78742017fdba030f5482a2e63029c23d.setContent(html_0f1eb71ffb7c22f8ba4148c346cd8df4);
+            
+        
+
+        circle_marker_9961f8602a0c4265f28b0671e33bf050.bindPopup(popup_78742017fdba030f5482a2e63029c23d)
+        ;
+
+        
+    
+    
+            var circle_marker_12d853796c71c76aa78924fa5ae8b373 = L.circleMarker(
+                [42.3778572704267, -83.1151751267719],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee3d6ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_b090fc129aafa10c195cc19bdba626ab = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_db8b01e0968c9f52c0e6eabf03bd2953 = $(`<div id="html_db8b01e0968c9f52c0e6eabf03bd2953" style="width: 100.0%; height: 100.0%;">Focus Rank: 33<br>Precinct: 10<br>Neighborhood: Dexter-Linwood<br>Nearest Intersection: W Boston Blvd & Lawton St<br>Incidents: 107<br>Dominant Crime: ASSAULT (27)<br>Dominant Share: 25.2%<br>Mean Spike Z: 0.51<br>Priority Score: 0.133</div>`)[0];
+                popup_b090fc129aafa10c195cc19bdba626ab.setContent(html_db8b01e0968c9f52c0e6eabf03bd2953);
+            
+        
+
+        circle_marker_12d853796c71c76aa78924fa5ae8b373.bindPopup(popup_b090fc129aafa10c195cc19bdba626ab)
+        ;
+
+        
+    
+    
+            var circle_marker_cbfc6bc8d33340a6b0fc947c33b941be = L.circleMarker(
+                [42.3852680185102, -83.1278499209082],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee3d6ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_e23cdb5482a54f306fd0058e2d447c26 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_f6ef98075eb10250011e5eeb9eb6cdec = $(`<div id="html_f6ef98075eb10250011e5eeb9eb6cdec" style="width: 100.0%; height: 100.0%;">Focus Rank: 34<br>Precinct: 10<br>Neighborhood: Russell Woods<br>Nearest Intersection: Sturtevant St & Dexter Ave<br>Incidents: 104<br>Dominant Crime: FRAUD (36)<br>Dominant Share: 34.6%<br>Mean Spike Z: 0.56<br>Priority Score: 0.133</div>`)[0];
+                popup_e23cdb5482a54f306fd0058e2d447c26.setContent(html_f6ef98075eb10250011e5eeb9eb6cdec);
+            
+        
+
+        circle_marker_cbfc6bc8d33340a6b0fc947c33b941be.bindPopup(popup_e23cdb5482a54f306fd0058e2d447c26)
+        ;
+
+        
+    
+    
+            var circle_marker_00d4dd4d897c96f99ca4e54544eb78ea = L.circleMarker(
+                [42.3861840633472, -83.1529576768803],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee4d8ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 15, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_a885afc0648e6e19d7b2198aab1baeb9 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_ac8b532937e0c322efbf8b46a7d79875 = $(`<div id="html_ac8b532937e0c322efbf8b46a7d79875" style="width: 100.0%; height: 100.0%;">Focus Rank: 35<br>Precinct: 10<br>Neighborhood: Davison-Schoolcraft<br>Nearest Intersection: W Davison St & Northlawn St<br>Incidents: 76<br>Dominant Crime: ASSAULT (19)<br>Dominant Share: 25.0%<br>Mean Spike Z: 1.03<br>Priority Score: 0.131</div>`)[0];
+                popup_a885afc0648e6e19d7b2198aab1baeb9.setContent(html_ac8b532937e0c322efbf8b46a7d79875);
+            
+        
+
+        circle_marker_00d4dd4d897c96f99ca4e54544eb78ea.bindPopup(popup_a885afc0648e6e19d7b2198aab1baeb9)
+        ;
+
+        
+    
+    
+            var circle_marker_cbef27d4658342263921b5f66f728d9c = L.circleMarker(
+                [42.3865621367842, -83.124434312089],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee4d8ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 17, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_281a9649694dd414115bbb2deed9b8df = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_45c36b7a6843e2d7b3e33ec8515f2779 = $(`<div id="html_45c36b7a6843e2d7b3e33ec8515f2779" style="width: 100.0%; height: 100.0%;">Focus Rank: 36<br>Precinct: 10<br>Neighborhood: Dexter-Linwood<br>Nearest Intersection: Wildemere St & Leslie St<br>Incidents: 95<br>Dominant Crime: ASSAULT (23)<br>Dominant Share: 24.2%<br>Mean Spike Z: 0.68<br>Priority Score: 0.131</div>`)[0];
+                popup_281a9649694dd414115bbb2deed9b8df.setContent(html_45c36b7a6843e2d7b3e33ec8515f2779);
+            
+        
+
+        circle_marker_cbef27d4658342263921b5f66f728d9c.bindPopup(popup_281a9649694dd414115bbb2deed9b8df)
+        ;
+
+        
+    
+    
+            var circle_marker_098b5fb63739cca55c06c566db7affcf = L.circleMarker(
+                [42.3680392450879, -83.1232445016721],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee4d8ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 16, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_b7b8b23c0b82241e79e549d6dfabf3ca = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_019350f1ea7f43ad93b9a0db34b2ebea = $(`<div id="html_019350f1ea7f43ad93b9a0db34b2ebea" style="width: 100.0%; height: 100.0%;">Focus Rank: 37<br>Precinct: 10<br>Neighborhood: Nardin Park<br>Nearest Intersection: Joy Rd & Otsego St<br>Incidents: 82<br>Dominant Crime: ASSAULT (15)<br>Dominant Share: 18.3%<br>Mean Spike Z: 0.91<br>Priority Score: 0.130</div>`)[0];
+                popup_b7b8b23c0b82241e79e549d6dfabf3ca.setContent(html_019350f1ea7f43ad93b9a0db34b2ebea);
+            
+        
+
+        circle_marker_098b5fb63739cca55c06c566db7affcf.bindPopup(popup_b7b8b23c0b82241e79e549d6dfabf3ca)
+        ;
+
+        
+    
+    
+            var circle_marker_3ee3b819c868907071679f005ca3d840 = L.circleMarker(
+                [42.3980247091787, -83.1543166634489],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee4d8ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 13, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_1c0f5007a9116bdc100f5dcfae58110c = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_c75ba59eede69943be2abd6a917a9d17 = $(`<div id="html_c75ba59eede69943be2abd6a917a9d17" style="width: 100.0%; height: 100.0%;">Focus Rank: 38<br>Precinct: 10<br>Neighborhood: Chalfonte<br>Nearest Intersection: Cherrylawn St & Eaton St<br>Incidents: 55<br>Dominant Crime: ASSAULT (15)<br>Dominant Share: 27.3%<br>Mean Spike Z: 1.39<br>Priority Score: 0.130</div>`)[0];
+                popup_1c0f5007a9116bdc100f5dcfae58110c.setContent(html_c75ba59eede69943be2abd6a917a9d17);
+            
+        
+
+        circle_marker_3ee3b819c868907071679f005ca3d840.bindPopup(popup_1c0f5007a9116bdc100f5dcfae58110c)
+        ;
+
+        
+    
+    
+            var circle_marker_1529f08bab7ceec680910ad22b7f8afb = L.circleMarker(
+                [42.3883520233292, -83.1222682134315],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee4d8ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_674c6fb848936a6fa98f967e614b35b5 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_c8d886959517372f9ed0358840acc313 = $(`<div id="html_c8d886959517372f9ed0358840acc313" style="width: 100.0%; height: 100.0%;">Focus Rank: 39<br>Precinct: 10<br>Neighborhood: Dexter-Linwood<br>Nearest Intersection: Fullerton St & Lawton St<br>Incidents: 115<br>Dominant Crime: ASSAULT (28)<br>Dominant Share: 24.3%<br>Mean Spike Z: 0.32<br>Priority Score: 0.130</div>`)[0];
+                popup_674c6fb848936a6fa98f967e614b35b5.setContent(html_c8d886959517372f9ed0358840acc313);
+            
+        
+
+        circle_marker_1529f08bab7ceec680910ad22b7f8afb.bindPopup(popup_674c6fb848936a6fa98f967e614b35b5)
+        ;
+
+        
+    
+    
+            var circle_marker_fb1999cd0a7996e0aced1cd90918374c = L.circleMarker(
+                [42.3924332084077, -83.1397130917558],
+                {"bubblingMouseEvents": true, "color": "#7f0000", "dashArray": null, "dashOffset": null, "fill": true, "fillColor": "#fee5d9ff", "fillOpacity": 0.7, "fillRule": "evenodd", "lineCap": "round", "lineJoin": "round", "opacity": 1.0, "radius": 18, "stroke": true, "weight": 3}
+            ).addTo(map_83536d147dfc65edf9cb97a8d0d3f277);
+        
+    
+        var popup_9807891d39315e90c9944dfed34b93c8 = L.popup({
+  "maxWidth": "100%",
+});
+
+        
+            
+                var html_254b0ea8ce94e07626407dacd304fbe1 = $(`<div id="html_254b0ea8ce94e07626407dacd304fbe1" style="width: 100.0%; height: 100.0%;">Focus Rank: 40<br>Precinct: 10<br>Neighborhood: Oakman Blvd Community<br>Nearest Intersection: Kendall St & Livernois Ave<br>Incidents: 130<br>Dominant Crime: FRAUD (58)<br>Dominant Share: 44.6%<br>Mean Spike Z: 0.02<br>Priority Score: 0.129</div>`)[0];
+                popup_9807891d39315e90c9944dfed34b93c8.setContent(html_254b0ea8ce94e07626407dacd304fbe1);
+            
+        
+
+        circle_marker_fb1999cd0a7996e0aced1cd90918374c.bindPopup(popup_9807891d39315e90c9944dfed34b93c8)
+        ;
+
+        
+    
+</script>
+</html>
