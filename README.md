@@ -5,6 +5,8 @@ An interactive crime analytics and operational decision-support project examinin
 ### 🔗 Live Dashboard
 **[Open Detroit Crime Operations Dashboard](https://greatness522.github.io/Detroit-Crime-Hotspot-Analytics/)**
 
+>**Viewing note**: For the best experience, particularly when using the interactive maps and analytical drill-downs, this dashboard is best viewed on a laptop or desktop browser.
+
 ![Detroit Crime Operations Dashboard](Images/dashboard_overview.png)
 ---
 
@@ -222,3 +224,4 @@ The purpose of the analysis is to identify patterns, prioritize areas for furthe
 
 **Abigail Amofa**  
 M.S. Data Science & Business Analytics
+
