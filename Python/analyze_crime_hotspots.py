@@ -21,6 +21,7 @@ except ModuleNotFoundError:  # pragma: no cover - optional dependency in constra
 from folium.plugins import HeatMap, MarkerCluster, FastMarkerCluster, Fullscreen
 from sklearn.cluster import DBSCAN
 from sklearn.preprocessing import StandardScaler
+from scipy.spatial import ConvexHull, QhullError
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -3824,6 +3825,285 @@ def build_daily_precinct_category_counts(df: pd.DataFrame, precincts: list[str])
     }
 
 
+def build_neighborhood_boundaries(df: pd.DataFrame, min_incidents: int = 10) -> dict:
+    """Approximate neighborhood outlines derived from incident point clusters.
+
+    There is no authoritative neighborhood boundary shapefile in this dataset,
+    so each outline is a convex hull (or, for very small/degenerate point
+    sets, a small buffered box around the centroid) built from that
+    neighborhood's own incident coordinates. These are approximations for
+    visual orientation only, not official city boundaries.
+    """
+    boundaries = {}
+    for neighborhood, subset in df.groupby("neighborhood"):
+        pts = subset[["latitude", "longitude"]].dropna().drop_duplicates().to_numpy()
+        if len(pts) < 1:
+            continue
+        if len(subset) < min_incidents:
+            continue
+        if len(pts) >= 3:
+            try:
+                hull = ConvexHull(pts)
+                ring = pts[hull.vertices].tolist()
+                ring.append(ring[0])
+                boundaries[str(neighborhood)] = [[round(lat, 6), round(lng, 6)] for lat, lng in ring]
+                continue
+            except QhullError:
+                pass
+        # Degenerate case (collinear or too few points): buffer a small box.
+        lat_c, lng_c = float(pts[:, 0].mean()), float(pts[:, 1].mean())
+        pad = 0.0025
+        boundaries[str(neighborhood)] = [
+            [round(lat_c - pad, 6), round(lng_c - pad, 6)],
+            [round(lat_c - pad, 6), round(lng_c + pad, 6)],
+            [round(lat_c + pad, 6), round(lng_c + pad, 6)],
+            [round(lat_c + pad, 6), round(lng_c - pad, 6)],
+            [round(lat_c - pad, 6), round(lng_c - pad, 6)],
+        ]
+    return boundaries
+
+
+def build_area_crime_points(df: pd.DataFrame) -> dict:
+    """Compact point-level export for the Area + Crime Type map builder.
+
+    Encodes every incident's coordinates plus index references into a
+    neighborhood list and an offense-category list, so the browser can
+    filter to "this neighborhood, this crime type" without any server
+    round-trip and place one marker per matching incident.
+    """
+    temp = df.dropna(subset=["latitude", "longitude", "neighborhood", "offense_category"]).copy()
+    temp["neighborhood"] = temp["neighborhood"].astype(str)
+    temp["offense_category"] = temp["offense_category"].astype(str).str.upper()
+
+    neighborhood_list = sorted(temp["neighborhood"].unique().tolist())
+    category_list = sorted(temp["offense_category"].unique().tolist())
+    neighborhood_idx = {n: i for i, n in enumerate(neighborhood_list)}
+    category_idx = {c: i for i, c in enumerate(category_list)}
+
+    points = [
+        [
+            round(float(r.latitude), 6),
+            round(float(r.longitude), 6),
+            neighborhood_idx[r.neighborhood],
+            category_idx[r.offense_category],
+        ]
+        for r in temp.itertuples(index=False)
+    ]
+
+    return {
+        "neighborhoods": neighborhood_list,
+        "categories": category_list,
+        "boundaries": build_neighborhood_boundaries(temp),
+        "points": points,
+    }
+
+
+CRIME_ICON_SPECS = {
+    "ASSAULT": {"symbol": "\u2694", "color": "#b91c1c"},
+    "AGGRAVATED ASSAULT": {"symbol": "\u2694", "color": "#7f1d1d"},
+    "HOMICIDE": {"symbol": "\u2620", "color": "#450a0a"},
+    "ROBBERY": {"symbol": "\U0001f4b0", "color": "#9a3412"},
+    "WEAPONS OFFENSES": {"symbol": "\U0001f52b", "color": "#78350f"},
+    "SEX OFFENSES": {"symbol": "\u26a0", "color": "#831843"},
+    "SEXUAL ASSAULT": {"symbol": "\u26a0", "color": "#831843"},
+    "KIDNAPPING": {"symbol": "\u26d3", "color": "#581c87"},
+    "LARCENY": {"symbol": "\U0001f45c", "color": "#1d4ed8"},
+    "BURGLARY": {"symbol": "\U0001f3e0", "color": "#0369a1"},
+    "STOLEN VEHICLE": {"symbol": "\U0001f697", "color": "#0e7490"},
+    "STOLEN PROPERTY": {"symbol": "\U0001f4e6", "color": "#0f766e"},
+    "DAMAGE TO PROPERTY": {"symbol": "\U0001f528", "color": "#a16207"},
+    "ARSON": {"symbol": "\U0001f525", "color": "#c2410c"},
+    "FRAUD": {"symbol": "\U0001f4b3", "color": "#4338ca"},
+    "FORGERY": {"symbol": "\u270d", "color": "#4338ca"},
+    "EMBEZZLEMENT": {"symbol": "\U0001f4bc", "color": "#4338ca"},
+    "BRIBERY": {"symbol": "\U0001f91d", "color": "#4338ca"},
+    "DANGEROUS DRUGS": {"symbol": "\U0001f48a", "color": "#166534"},
+    "OUIL": {"symbol": "\U0001f37a", "color": "#854d0e"},
+    "OBSTRUCTING THE POLICE": {"symbol": "\U0001f6a8", "color": "#334155"},
+    "OBSTRUCTING JUDICIARY": {"symbol": "\U0001f6a8", "color": "#334155"},
+    "FAMILY OFFENSE": {"symbol": "\U0001f3e1", "color": "#7c2d12"},
+    "INVASION OF PRIVACY -OTHER": {"symbol": "\U0001f441", "color": "#6d28d9"},
+    "DISORDERLY CONDUCT": {"symbol": "\u203c", "color": "#57534e"},
+    "RUNAWAY": {"symbol": "\U0001f6b6", "color": "#57534e"},
+    "EXTORTION": {"symbol": "\U0001f4dd", "color": "#4338ca"},
+    "HEALTH AND SAFETY": {"symbol": "\u2695", "color": "#065f46"},
+    "LIQUOR": {"symbol": "\U0001f37b", "color": "#854d0e"},
+}
+CRIME_ICON_DEFAULT = {"symbol": "\u25cf", "color": "#334155"}
+
+
+def save_area_crime_map_builder_html(area_crime_data: dict, out_path: Path) -> None:
+    """Standalone Leaflet page: pick a neighborhood, layer crime-type icons on it.
+
+    Distinct from the pre-baked combined dashboard — this page lets a viewer
+    build up their own view interactively: choose an area (drawn as an
+    approximate outline), add one or more crime-type icon layers scoped to
+    that area, and reset to start over, all without regenerating the page.
+    """
+    icon_specs = {cat: CRIME_ICON_SPECS.get(cat, CRIME_ICON_DEFAULT) for cat in area_crime_data["categories"]}
+    payload = {**area_crime_data, "icon_specs": icon_specs}
+    payload_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+
+    html_doc = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Detroit Crime — Area + Crime Type Map Builder</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css" />
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+<style>
+ :root{{--ink:#0f172a;--muted:#64748b;--line:#dbe3ef;--blue:#0b5cab;--soft:#f5f7fb;}}
+ *{{box-sizing:border-box}} body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--soft);color:var(--ink)}}
+ .wrap{{max-width:1320px;margin:0 auto;padding:20px 20px 40px}}
+ h1{{margin:4px 0;font-size:1.6rem}} .note{{color:var(--muted);font-size:.86rem;line-height:1.4}}
+ .panel{{background:#eef5ff;border:1px solid #bfdbfe;border-radius:12px;padding:14px;margin:14px 0;display:flex;gap:14px;align-items:end;flex-wrap:wrap}}
+ select,button{{padding:9px 11px;border:1px solid #93a4b8;border-radius:8px;background:#fff;font-weight:700;font-size:.92rem}}
+ button{{cursor:pointer;background:var(--blue);color:#fff;border-color:var(--blue)}}
+ button.secondary{{background:#fff;color:var(--ink);border-color:#93a4b8}}
+ #map{{height:640px;border-radius:12px;border:1px solid var(--line)}}
+ .layers{{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}}
+ .chip{{display:flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--line);border-radius:999px;padding:5px 6px 5px 11px;font-size:.82rem;font-weight:700}}
+ .chip button{{padding:2px 8px;border-radius:999px;font-size:.78rem;background:#fee2e2;color:#991b1b;border-color:#fecaca}}
+ .status{{font-size:.86rem;color:var(--muted);margin-top:4px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+ <h1>Area + Crime Type Map Builder</h1>
+ <p class="note">Choose a neighborhood to draw its approximate outline (a shape built from that neighborhood's own incident locations — not an official city boundary), then add one or more crime types to place icon markers for incidents of that type inside the area. Add as many crime types as you like; each gets its own removable layer. Reset clears everything so you can start again.</p>
+ <div class="panel">
+  <div><div style="font-weight:800;margin-bottom:6px;">Neighborhood / area</div>
+   <select id="areaSelect"><option value="">Select a neighborhood…</option></select>
+  </div>
+  <div><div style="font-weight:800;margin-bottom:6px;">Crime type</div>
+   <select id="crimeSelect"><option value="">Select a crime type…</option></select>
+  </div>
+  <div><button id="addBtn" type="button">Add crime type to map</button></div>
+  <div><button id="resetBtn" type="button" class="secondary">Reset</button></div>
+ </div>
+ <div class="layers" id="layerChips"></div>
+ <div class="status" id="status"></div>
+ <div id="map"></div>
+</div>
+<script>
+const DATA={payload_json};
+const neighborhoods=DATA.neighborhoods, categories=DATA.categories, boundaries=DATA.boundaries, points=DATA.points, iconSpecs=DATA.icon_specs;
+
+const areaSelect=document.getElementById('areaSelect');
+const crimeSelect=document.getElementById('crimeSelect');
+const statusEl=document.getElementById('status');
+const layerChips=document.getElementById('layerChips');
+
+neighborhoods.forEach(n=>{{const o=document.createElement('option');o.value=n;o.textContent=n+(boundaries[n]?'':' (outline unavailable)');areaSelect.appendChild(o);}});
+categories.forEach(c=>{{const o=document.createElement('option');o.value=c;o.textContent=c;crimeSelect.appendChild(o);}});
+
+const map=L.map('map').setView([42.3468,-83.0700],11);
+L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',{{maxZoom:19,attribution:'&copy; OpenStreetMap &copy; CARTO'}}).addTo(map);
+
+let areaOutline=null;
+let selectedArea=null;
+const crimeLayers={{}};
+
+function clearAreaOutline(){{if(areaOutline){{map.removeLayer(areaOutline);areaOutline=null;}}}}
+
+function drawArea(name){{
+ clearAreaOutline();
+ selectedArea=name;
+ const ring=boundaries[name];
+ if(!ring){{statusEl.textContent=name+': no outline available (too few mapped incidents). You can still add crime-type layers below.';return;}}
+ const latlngs=ring.map(p=>[p[0],p[1]]);
+ areaOutline=L.polygon(latlngs,{{color:'#0b5cab',weight:2,fillColor:'#0b5cab',fillOpacity:0.08}}).addTo(map);
+ map.fitBounds(areaOutline.getBounds(),{{padding:[24,24]}});
+ statusEl.textContent='Showing approximate outline for '+name+'. Add a crime type to place icons inside this area.';
+}}
+
+function iconFor(category){{
+ const spec=iconSpecs[category]||{{symbol:'\u25cf',color:'#334155'}};
+ return L.divIcon({{
+  className:'crime-marker',
+  html:'<div style="background:'+spec.color+';color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:12px;box-shadow:0 1px 3px rgba(0,0,0,.4);">'+spec.symbol+'</div>',
+  iconSize:[22,22],
+  iconAnchor:[11,11],
+ }});
+}}
+
+function addCrimeLayer(area,category){{
+ const key=area+'||'+category;
+ if(crimeLayers[key]){{statusEl.textContent=category+' is already shown for '+area+'.';return;}}
+ const areaIdx=neighborhoods.indexOf(area);
+ const catIdx=categories.indexOf(category);
+ if(areaIdx===-1||catIdx===-1)return;
+ const icon=iconFor(category);
+ const group=L.layerGroup();
+ let count=0;
+ for(let i=0;i<points.length;i++){{
+  const p=points[i];
+  if(p[2]!==areaIdx||p[3]!==catIdx)continue;
+  L.marker([p[0],p[1]],{{icon:icon}}).addTo(group);
+  count++;
+ }}
+ group.addTo(map);
+ crimeLayers[key]={{group:group,area:area,category:category,count:count}};
+ renderChips();
+ statusEl.textContent=count?('Added '+count+' '+category+' incident'+(count===1?'':'s')+' in '+area+'.'):('No '+category+' incidents recorded in '+area+'.');
+}}
+
+function removeCrimeLayer(key){{
+ const entry=crimeLayers[key];
+ if(!entry)return;
+ map.removeLayer(entry.group);
+ delete crimeLayers[key];
+ renderChips();
+}}
+
+function renderChips(){{
+ layerChips.innerHTML='';
+ Object.keys(crimeLayers).forEach(key=>{{
+  const entry=crimeLayers[key];
+  const chip=document.createElement('div');
+  chip.className='chip';
+  const spec=iconSpecs[entry.category]||{{color:'#334155'}};
+  chip.innerHTML='<span style="color:'+spec.color+'">\u25cf</span> '+entry.category+' — '+entry.area+' ('+entry.count+')';
+  const btn=document.createElement('button');
+  btn.type='button';btn.textContent='Remove';
+  btn.addEventListener('click',()=>removeCrimeLayer(key));
+  chip.appendChild(btn);
+  layerChips.appendChild(chip);
+ }});
+}}
+
+areaSelect.addEventListener('change',()=>{{
+ const name=areaSelect.value;
+ if(!name){{clearAreaOutline();selectedArea=null;statusEl.textContent='';return;}}
+ drawArea(name);
+}});
+
+document.getElementById('addBtn').addEventListener('click',()=>{{
+ const area=areaSelect.value, category=crimeSelect.value;
+ if(!area){{statusEl.textContent='Choose a neighborhood first.';return;}}
+ if(!category){{statusEl.textContent='Choose a crime type to add.';return;}}
+ addCrimeLayer(area,category);
+}});
+
+document.getElementById('resetBtn').addEventListener('click',()=>{{
+ Object.keys(crimeLayers).forEach(key=>map.removeLayer(crimeLayers[key].group));
+ for(const key in crimeLayers)delete crimeLayers[key];
+ renderChips();
+ clearAreaOutline();
+ areaSelect.value='';
+ crimeSelect.value='';
+ selectedArea=null;
+ statusEl.textContent='Reset. Choose a neighborhood to begin again.';
+}});
+</script>
+</body>
+</html>
+"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html_doc, encoding="utf-8")
+
+
 def generate_precinct_drilldown_assets(
     df: pd.DataFrame,
     focus_locations: pd.DataFrame,
@@ -3927,6 +4207,7 @@ def save_operations_landing_html(
     previous_year: int,
     period_tag: str,
     map_filename: str,
+    area_map_filename: str,
     out_path: Path,
 ) -> None:
     """Citywide landing page that becomes a full precinct evaluation after selection."""
@@ -4310,6 +4591,7 @@ def save_operations_landing_html(
         "city": city_data,
         "precincts": precinct_data,
         "map_filename": map_filename,
+        "area_map_filename": area_map_filename,
         "daily_counts": daily_counts,
     }
     payload_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
@@ -4368,7 +4650,7 @@ th{{color:#475569;font-size:.76rem}} th:first-child,td:first-child{{text-align:l
 <div id="cityPrompt" class="brief">
 <h2>Detroit Overview</h2>
 <p style="line-height:1.55;margin:0;">Citywide totals provide context only. Choose a precinct above to open its full operational evaluation: focus locations, deployment summary, matched-YTD improvement, dominant crime types, shift demand, decision-purpose workload, recent concerns, and precinct-only maps/charts.</p>
-<div class="links"><a href="../Images/{map_filename}?section=map" target="_blank">Open Detroit Interactive Map</a></div>
+<div class="links"><a href="../Images/{map_filename}?section=map" target="_blank">Open Detroit Interactive Map</a> <a href="../Images/{area_map_filename}" target="_blank">Build an Area + Crime Type Map</a></div>
 </div>
 
 <div id="precinctOverview">
@@ -4946,6 +5228,7 @@ def main() -> None:
     # Primary entry point + interactive drill-down.
     operations_overview_html = DOCS_DIR / f"detroit_crime_operations_overview_{period_tag}.html"
     combined_dashboard_html = IMAGES_DIR / f"detroit_crime_interactive_dashboard_{period_tag}.html"
+    area_map_builder_html = IMAGES_DIR / f"area_crime_map_builder_{period_tag}.html"
 
     # Preserve the useful legacy drill-down ideas, but regenerate each asset
     # separately for every operational precinct.
@@ -4955,6 +5238,10 @@ def main() -> None:
         current_year=current_year,
         period_tag=period_tag,
     )
+
+    # Standalone area + crime-type map builder (additive, removable layers).
+    area_crime_data = build_area_crime_points(df)
+    save_area_crime_map_builder_html(area_crime_data, area_map_builder_html)
 
     # Lean audit outputs: each one directly supports a dashboard statement.
     weekly_csv = DOCS_DIR / f"weekly_neighborhood_counts_and_spikes_{period_tag}.csv"
@@ -4991,6 +5278,7 @@ def main() -> None:
         previous_year=previous_year,
         period_tag=period_tag,
         map_filename=combined_dashboard_html.name,
+        area_map_filename=area_map_builder_html.name,
         out_path=operations_overview_html,
     )
     # Keep GitHub Pages homepage synchronized with the latest operations overview.
