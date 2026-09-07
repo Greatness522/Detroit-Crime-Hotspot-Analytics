@@ -3777,6 +3777,53 @@ def _operational_precinct_values(df: pd.DataFrame) -> list[str]:
     )
 
 
+def build_daily_precinct_category_counts(df: pd.DataFrame, precincts: list[str]) -> dict:
+    """Compact daily precinct x crime-category incident counts.
+
+    Shipped to the dashboard so users can manually pick arbitrary "previous"
+    and "current" date ranges instead of only the automated trailing 28 days.
+    Encoded as index-referenced rows (precinct index, category index, day
+    offset from base_date, count) to keep the JSON payload small.
+    """
+    temp = df.copy()
+    temp["incident_date"] = pd.to_datetime(temp["incident_date"])
+    temp["precinct_key"] = temp["precinct_norm"].apply(_norm_operational_precinct)
+    temp["offense_category"] = temp["offense_category"].astype(str).str.upper()
+    temp = temp[temp["precinct_key"].isin(precincts)]
+
+    if temp.empty:
+        return {"precincts": [], "categories": [], "base_date": None, "rows": []}
+
+    counts = (
+        temp.groupby(["precinct_key", "offense_category", "incident_date"])
+        .size()
+        .reset_index(name="count")
+    )
+
+    precinct_list = sorted(counts["precinct_key"].unique().tolist())
+    category_list = sorted(counts["offense_category"].unique().tolist())
+    precinct_idx = {p: i for i, p in enumerate(precinct_list)}
+    category_idx = {c: i for i, c in enumerate(category_list)}
+    base_date = counts["incident_date"].min()
+
+    rows = [
+        [
+            precinct_idx[r.precinct_key],
+            category_idx[r.offense_category],
+            int((r.incident_date - base_date).days),
+            int(r.count),
+        ]
+        for r in counts.itertuples(index=False)
+    ]
+
+    return {
+        "precincts": precinct_list,
+        "categories": category_list,
+        "base_date": base_date.strftime("%Y-%m-%d"),
+        "rows": rows,
+    }
+
+
 def generate_precinct_drilldown_assets(
     df: pd.DataFrame,
     focus_locations: pd.DataFrame,
@@ -3989,6 +4036,8 @@ def save_operations_landing_html(
         "precinct_count": int(len(precincts)),
         "highest_volume_precinct": highest_volume_precinct,
         "highest_volume": highest_volume,
+        "range_min_date": temp["incident_date"].min().strftime("%Y-%m-%d") if not temp.empty else None,
+        "range_max_date": temp["incident_date"].max().strftime("%Y-%m-%d") if not temp.empty else None,
     }
 
     # Global spike-week marker used to calculate each precinct's deployment summary.
@@ -4255,10 +4304,13 @@ def save_operations_landing_html(
             "assets": precinct_assets.get(precinct, {}),
         }
 
+    daily_counts = build_daily_precinct_category_counts(temp, precincts)
+
     payload = {
         "city": city_data,
         "precincts": precinct_data,
         "map_filename": map_filename,
+        "daily_counts": daily_counts,
     }
     payload_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     precinct_options = "".join(
@@ -4331,13 +4383,27 @@ th{{color:#475569;font-size:.76rem}} th:first-child,td:first-child{{text-align:l
     <div class="links" id="modernLinks" style="padding-top:4px;border-top:1px solid #eef2f7;"></div>
   </div>
 
+  <div class="brief" id="rangeFilterBox">
+    <h3>Custom Date Range Filter</h3>
+    <div class="note">Pick your own "previous" and "current" windows to recompute recent activity, dominant crime types, priority/emerging concerns, and decision-purpose workload below for the selected precinct. Shift-level demand, recent timing, hotspot change, and focus locations require hour-of-day or geographic detail not shipped to the browser, so they continue to reflect the automated 28-day pipeline window.</div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;align-items:end;">
+      <div><label for="rangePrevStart">Previous range start</label><br><input type="date" id="rangePrevStart"></div>
+      <div><label for="rangePrevEnd">Previous range end</label><br><input type="date" id="rangePrevEnd"></div>
+      <div><label for="rangeCurrStart">Current range start</label><br><input type="date" id="rangeCurrStart"></div>
+      <div><label for="rangeCurrEnd">Current range end</label><br><input type="date" id="rangeCurrEnd"></div>
+      <div><button id="rangeApplyBtn" type="button">Apply custom range</button></div>
+      <div><button id="rangeResetBtn" type="button">Reset to automated 28-day window</button></div>
+    </div>
+    <div class="note" id="rangeStatus" style="margin-top:6px;"></div>
+  </div>
+
   <div class="cards" id="precinctCards"></div>
 
   <div class="brief"><h3>Overall Evaluation</h3><p id="precinctBrief" style="line-height:1.58;margin:0;"></p></div>
 
   <div class="section anchor-target" id="focusSection">
     <h2>Top 10 Operational Focus Locations</h2>
-    <div class="note">Highest-ranked focus cells inside the selected precinct only.</div>
+    <div class="note">Highest-ranked focus cells inside the selected precinct only. Reflects the automated 28-day pipeline window; not affected by the custom date range filter.</div>
     <div id="focusLocations"></div>
   </div>
 
@@ -4368,13 +4434,13 @@ th{{color:#475569;font-size:.76rem}} th:first-child,td:first-child{{text-align:l
   </div>
 
   <div class="grid2">
-    <div class="section anchor-target" id="shiftSection"><h2>Shift-Level Demand and Dominant Crime</h2><div id="shiftSummary"></div></div>
+    <div class="section anchor-target" id="shiftSection"><h2>Shift-Level Demand and Dominant Crime</h2><div class="note">Reflects the automated 28-day pipeline window; not affected by the custom date range filter.</div><div id="shiftSummary"></div></div>
     <div class="section anchor-target" id="decisionSection"><h2>Decision-Purpose Workload and Dominant Crime</h2><div id="decisionSummary"></div></div>
   </div>
 
   <div class="grid2">
-    <div class="section anchor-target" id="timingSection"><h2>Recent Timing Snapshot</h2><div id="timingSummary"></div></div>
-    <div class="section anchor-target" id="hotspotSection"><h2>Hotspot Change Snapshot</h2><div id="hotspotSummary"></div></div>
+    <div class="section anchor-target" id="timingSection"><h2>Recent Timing Snapshot</h2><div class="note">Reflects the automated 28-day pipeline window; not affected by the custom date range filter.</div><div id="timingSummary"></div></div>
+    <div class="section anchor-target" id="hotspotSection"><h2>Hotspot Change Snapshot</h2><div class="note">Reflects the automated 28-day pipeline window; not affected by the custom date range filter.</div><div id="hotspotSummary"></div></div>
   </div>
 </div>
 </div>
@@ -4391,6 +4457,73 @@ function signalClass(s){{return s==='High Priority'?'high':s==='Emerging Concern
 function hourLabel(h){{if(h===null||h===undefined||Number.isNaN(Number(h)))return '—';let n=Number(h),s=n>=12?'PM':'AM',h12=n%12||12;return h12+' '+s;}}
 function analysisUrl(p,section){{return '../Images/'+DATA.map_filename+'?precinct='+encodeURIComponent(p)+'&section='+encodeURIComponent(section);}}
 function assetLink(path,label){{return path?`<a href="${{path}}" target="_blank">${{label}}</a>`:'';}}
+
+const DECISION_PURPOSE_MAP={{'LARCENY':'Preventive Patrol','BURGLARY':'Preventive Patrol','STOLEN VEHICLE':'Preventive Patrol','STOLEN PROPERTY':'Preventive Patrol','ROBBERY':'Preventive Patrol','DAMAGE TO PROPERTY':'Preventive Patrol','FRAUD':'Investigations','FORGERY':'Investigations','EMBEZZLEMENT':'Investigations','ARSON':'Investigations','BRIBERY':'Investigations','ASSAULT':'Community Response','AGGRAVATED ASSAULT':'Community Response','WEAPONS OFFENSES':'Community Response','OBSTRUCTING THE POLICE':'Community Response','HOMICIDE':'Community Response','KIDNAPPING':'Community Response'}};
+function decisionPurposeFor(crime){{return DECISION_PURPOSE_MAP[String(crime||'').toUpperCase()]||'Preventive Patrol';}}
+
+const dailyCounts=DATA.daily_counts||{{precincts:[],categories:[],base_date:null,rows:[]}};
+const dcPrecinctIdx={{}};(dailyCounts.precincts||[]).forEach((p,i)=>{{dcPrecinctIdx[p]=i;}});
+const dcBaseDate=dailyCounts.base_date?new Date(dailyCounts.base_date+'T00:00:00Z'):null;
+function dayOffsetFor(dateStr){{if(!dcBaseDate||!dateStr)return null;const d=new Date(dateStr+'T00:00:00Z');return Math.round((d-dcBaseDate)/86400000);}}
+function categoryCountsInRange(precinct,startOffset,endOffset){{
+ const out={{}};let total=0;
+ if(startOffset===null||endOffset===null||startOffset>endOffset)return{{byCategory:out,total:0}};
+ const pIdx=(precinct!==null&&precinct!==undefined)?dcPrecinctIdx[precinct]:null;
+ const cats=dailyCounts.categories||[];
+ (dailyCounts.rows||[]).forEach(r=>{{
+  const pi=r[0],ci=r[1],day=r[2],cnt=r[3];
+  if(pIdx!==null&&pi!==pIdx)return;
+  if(day<startOffset||day>endOffset)return;
+  const cat=cats[ci];
+  out[cat]=(out[cat]||0)+cnt;total+=cnt;
+ }});
+ return{{byCategory:out,total:total}};
+}}
+function computeConcernRows(prevByCat,currByCat,cityPrevByCat,cityCurrByCat,ytdLookup){{
+ const cats=Object.keys(Object.assign({{}},prevByCat,currByCat));
+ const rows=cats.map(cat=>{{
+  const prev=prevByCat[cat]||0,curr=currByCat[cat]||0;
+  const change=curr-prev;
+  const pct=prev>0?(100*change/prev):null;
+  const cityPrev=cityPrevByCat[cat]||0,cityCurr=cityCurrByCat[cat]||0;
+  const cityChange=cityCurr-cityPrev;
+  const cityPct=cityPrev>0?(100*cityChange/cityPrev):null;
+  const ytd=ytdLookup[cat];
+  const ytdPct=(ytd===undefined||ytd===null||Number.isNaN(Number(ytd)))?null:Number(ytd);
+  return{{crime:cat,previous_28d:prev,current_28d:curr,change:change,pct_change_28d:pct,city_pct_change_28d:cityPct,ytd_pct_change:ytdPct}};
+ }});
+ const maxVolume=Math.max(1,...rows.map(r=>r.current_28d));
+ const maxAbsIncrease=Math.max(1,...rows.map(r=>Math.max(r.change,0)));
+ rows.forEach(r=>{{
+  const volumeComponent=25*Math.log1p(Math.max(r.current_28d,0))/Math.log1p(maxVolume);
+  const absoluteComponent=30*Math.max(r.change,0)/maxAbsIncrease;
+  let pctSignal=r.pct_change_28d;
+  if(pctSignal===null||pctSignal===undefined||Number.isNaN(pctSignal))pctSignal=Math.min(Math.max(r.current_28d,0)*10,100);
+  const percentComponent=20*Math.min(Math.max(pctSignal,0),100)/100;
+  const cityGap=(r.pct_change_28d===null||r.pct_change_28d===undefined||Number.isNaN(r.pct_change_28d)||r.city_pct_change_28d===null||r.city_pct_change_28d===undefined||Number.isNaN(r.city_pct_change_28d))?0:(r.pct_change_28d-r.city_pct_change_28d);
+  const cityComponent=15*Math.min(Math.max(cityGap,0),50)/50;
+  const ytdVal=(r.ytd_pct_change===null||r.ytd_pct_change===undefined)?0:r.ytd_pct_change;
+  const ytdComponent=10*Math.min(Math.max(ytdVal,0),50)/50;
+  r.score=Math.round((volumeComponent+absoluteComponent+percentComponent+cityComponent+ytdComponent)*10)/10;
+  const volume=r.current_28d,absChange=r.change,recentPct=r.pct_change_28d,zeroBaseline=r.previous_28d===0;
+  const high=(volume>=20)&&(absChange>=10)&&((recentPct!==null&&recentPct>=25)||zeroBaseline)&&((cityGap>=10)||(ytdVal>2));
+  const emerging=(volume>=10)&&(absChange>=5)&&((recentPct!==null&&recentPct>=10)||zeroBaseline)&&((cityGap>=5)||(ytdVal>2));
+  const watch=(volume>=5)&&(absChange>0)&&((recentPct!==null&&recentPct>2)||zeroBaseline);
+  const improving=(volume>=5)&&(absChange<=-5)&&(recentPct!==null&&recentPct<=-10);
+  r.signal=high?'High Priority':emerging?'Emerging Concern':watch?'Watch':improving?'Recent Improvement':'Monitor';
+ }});
+ const order={{'High Priority':0,'Emerging Concern':1,'Watch':2,'Recent Improvement':3,'Monitor':4}};
+ rows.sort((a,b)=>{{const oa=order[a.signal],ob=order[b.signal];if(oa!==ob)return oa-ob;if(b.score!==a.score)return b.score-a.score;return b.current_28d-a.current_28d;}});
+ return rows;
+}}
+let customRange=null;
+(function initRangeInputs(){{
+ const minD=city.range_min_date,maxD=city.range_max_date;
+ ['rangePrevStart','rangePrevEnd','rangeCurrStart','rangeCurrEnd'].forEach(id=>{{
+  const el=document.getElementById(id);if(!el)return;
+  if(minD)el.min=minD;if(maxD)el.max=maxD;
+ }});
+}})();
 
 function renderCity(){{
  document.getElementById('cityCards').innerHTML=`
@@ -4412,22 +4545,76 @@ function renderPrecinct(p){{
  const d=precincts[p]; if(!d)return;
  document.getElementById('cityPrompt').style.display='none';
  document.getElementById('precinctOverview').style.display='block';
- const ov=d.overall||{{}}, rec=d.recent||{{}}, a=d.assets||{{}};
+ const ov=d.overall||{{}}, a=d.assets||{{}};
  document.getElementById('precinctTitle').textContent='Precinct '+p+' Operations Evaluation';
  document.getElementById('precinctDate').textContent='Matched YTD through '+(ov.comparison_date||city.data_through)+' · full data coverage '+city.min_year+'–'+city.max_year;
  document.getElementById('trendBadge').textContent=ov.improvement_status||'Trend unavailable';
 
+ let rec, crimeRecordsOverride=null, concernsOverride=null, decisionOverride=null;
+ const statusEl=document.getElementById('rangeStatus');
+ if(customRange){{
+  const prevStartOff=dayOffsetFor(customRange.prevStart),prevEndOff=dayOffsetFor(customRange.prevEnd);
+  const currStartOff=dayOffsetFor(customRange.currStart),currEndOff=dayOffsetFor(customRange.currEnd);
+  const prevAgg=categoryCountsInRange(p,prevStartOff,prevEndOff);
+  const currAgg=categoryCountsInRange(p,currStartOff,currEndOff);
+  const cityPrevAgg=categoryCountsInRange(null,prevStartOff,prevEndOff);
+  const cityCurrAgg=categoryCountsInRange(null,currStartOff,currEndOff);
+  rec={{previous_28d:prevAgg.total,current_28d:currAgg.total,pct_change_28d:prevAgg.total?100*(currAgg.total-prevAgg.total)/prevAgg.total:null}};
+
+  const baseCrimeLookup={{}};(d.dominant_crimes||[]).forEach(r=>{{baseCrimeLookup[r.crime]=r;}});
+  const allCats=Object.keys(Object.assign({{}},prevAgg.byCategory,currAgg.byCategory));
+  crimeRecordsOverride=allCats.map(cat=>{{
+   const base=baseCrimeLookup[cat]||{{}};
+   const curr=currAgg.byCategory[cat]||0,prev=prevAgg.byCategory[cat]||0;
+   return{{
+    crime:cat,
+    incident_count:base.incident_count!==undefined?base.incident_count:null,
+    share:base.share!==undefined?base.share:null,
+    current_ytd:base.current_ytd!==undefined?base.current_ytd:null,
+    ytd_pct_change:base.ytd_pct_change!==undefined?base.ytd_pct_change:null,
+    trend:base.trend||'—',
+    current_28d:curr,
+    recent_pct_change:prev?100*(curr-prev)/prev:null
+   }};
+  }}).sort((a,b)=>(b.current_28d||0)-(a.current_28d||0));
+
+  const ytdLookup={{}};(d.dominant_crimes||[]).forEach(r=>{{ytdLookup[r.crime]=r.ytd_pct_change;}});
+  concernsOverride=computeConcernRows(prevAgg.byCategory,currAgg.byCategory,cityPrevAgg.byCategory,cityCurrAgg.byCategory,ytdLookup)
+   .filter(r=>r.signal!=='Monitor').slice(0,8);
+
+  const decisionTotals={{}};
+  allCats.forEach(cat=>{{
+   const purpose=decisionPurposeFor(cat);
+   const curr=currAgg.byCategory[cat]||0;
+   if(!decisionTotals[purpose])decisionTotals[purpose]={{incidents:0,offenses:{{}}}};
+   decisionTotals[purpose].incidents+=curr;
+   decisionTotals[purpose].offenses[cat]=(decisionTotals[purpose].offenses[cat]||0)+curr;
+  }});
+  decisionOverride=Object.keys(decisionTotals).map(purpose=>{{
+   const info=decisionTotals[purpose];
+   let domCat='—',domCount=0;
+   Object.keys(info.offenses).forEach(cat=>{{if(info.offenses[cat]>domCount){{domCount=info.offenses[cat];domCat=cat;}}}});
+   return{{purpose:purpose,incidents:info.incidents,dominant_offense:domCat,dominant_offense_count:domCount,dominant_offense_share:info.incidents?domCount/info.incidents:null}};
+  }}).sort((a,b)=>b.incidents-a.incidents);
+
+  if(statusEl)statusEl.textContent='Custom range applied: '+customRange.currStart+' to '+customRange.currEnd+' vs '+customRange.prevStart+' to '+customRange.prevEnd+'.';
+ }} else {{
+  rec=d.recent||{{}};
+  if(statusEl)statusEl.textContent='';
+ }}
+
  document.getElementById('precinctCards').innerHTML=`
  <div class="card"><div class="label">${{city.current_year}} YTD incidents</div><div class="value">${{fmtN(ov.incidents_current)}}</div></div>
  <div class="card"><div class="label">vs ${{city.previous_year}} YTD</div><div class="value ${{pctClass(ov.pct_change_vs_previous)}}">${{fmtPct(ov.pct_change_vs_previous)}}</div></div>
- <div class="card"><div class="label">Current 28 days</div><div class="value">${{fmtN(rec.current_28d)}}</div><div class="note ${{pctClass(rec.pct_change_28d)}}">${{fmtPct(rec.pct_change_28d)}} vs prior 28D</div></div>
- <div class="card"><div class="label">Priority concerns</div><div class="value">${{fmtN(d.concern_count)}}</div></div>
+ <div class="card"><div class="label">${{customRange?'Custom current range':'Current 28 days'}}</div><div class="value">${{fmtN(rec.current_28d)}}</div><div class="note ${{pctClass(rec.pct_change_28d)}}">${{fmtPct(rec.pct_change_28d)}} vs ${{customRange?'custom previous range':'prior 28D'}}</div></div>
+ <div class="card"><div class="label">Priority concerns</div><div class="value">${{fmtN((concernsOverride||d.concerns||[]).length)}}</div></div>
  <div class="card"><div class="label">Focus locations</div><div class="value">${{fmtN((d.focus_locations||[]).length)}}</div></div>`;
 
  let s=[];
  if(ov.pct_change_vs_previous!==null&&ov.pct_change_vs_previous!==undefined)s.push(`Overall matched-YTD incidents are ${{Math.abs(Number(ov.pct_change_vs_previous)).toFixed(1)}}% ${{Number(ov.pct_change_vs_previous)<0?'below':'above'}} ${{city.previous_year}}.`);
  if(rec.pct_change_28d!==null&&rec.pct_change_28d!==undefined)s.push(`Recent activity moved from ${{fmtN(rec.previous_28d)}} to ${{fmtN(rec.current_28d)}} incidents (${{fmtPct(rec.pct_change_28d)}}).`);
- if(d.concerns&&d.concerns.length)s.push(`${{d.concerns[0].crime}} is the leading current attention signal (${{d.concerns[0].signal}}).`);
+ const concernsForBrief=concernsOverride||d.concerns;
+ if(concernsForBrief&&concernsForBrief.length)s.push(`${{concernsForBrief[0].crime}} is the leading current attention signal (${{concernsForBrief[0].signal}}).`);
  if(d.timing)s.push(`Recent activity peaks on ${{d.timing.peak_day}} around ${{hourLabel(d.timing.peak_hour)}}, with ${{d.timing.peak_time_block}} as the busiest broad time block.`);
  if(d.focus_locations&&d.focus_locations.length)s.push(`The highest-ranked focus location is ${{d.focus_locations[0].neighborhood}} near ${{d.focus_locations[0].intersection}}.`);
  document.getElementById('precinctBrief').textContent=s.join(' ');
@@ -4439,6 +4626,7 @@ function renderPrecinct(p){{
    assetLink(a.shift_chart,'Open Shift Summary Chart'),
    assetLink(a.decision_chart,'Open Decision Purpose Chart'),
    assetLink(a.monthly_heatmap,'Open Precinct Monthly Trend Heatmap'),
+   assetLink(a.violent_type_chart,'Open Violent Crime 28-Day Type Breakdown'),
    assetLink(a.violent_day_hour,'Open Violent Crime 28-Day Day/Hour')
  ].filter(Boolean).join('');
  document.getElementById('modernLinks').innerHTML=[
@@ -4464,7 +4652,7 @@ function renderPrecinct(p){{
  </div>`;
 
  document.getElementById('improvementSummary').innerHTML=simpleTable(
- ['${baseline_year if baseline_year is not None else "Baseline"}','${previous_year}','${current_year}','vs ${previous_year}','vs ${baseline_year if baseline_year is not None else "baseline"}','Status','Score'],
+ ['$2024','$2025','$2026','vs $2025','vs $2024','Status','Score'],
  [[fmtN(ov.incidents_baseline),fmtN(ov.incidents_previous),fmtN(ov.incidents_current),fmtPct(ov.pct_change_vs_previous),fmtPct(ov.pct_change_vs_baseline),ov.improvement_status||'—',ov.improvement_score===null?'—':Number(ov.improvement_score).toFixed(2)]]
  );
  const wd=(d.worsening_drivers||[]).map(r=>[r.crime,fmtN(r.previous),fmtN(r.current),fmtPct(r.pct),r.trend]);
@@ -4472,16 +4660,16 @@ function renderPrecinct(p){{
  document.getElementById('worseningDrivers').innerHTML=simpleTable(['Crime',city.previous_year,city.current_year,'% change','Trend'],wd);
  document.getElementById('improvingDrivers').innerHTML=simpleTable(['Crime',city.previous_year,city.current_year,'% change','Trend'],id);
 
- const dc=(d.dominant_crimes||[]).map(r=>[r.crime,fmtN(r.incident_count),fmtShare(r.share),fmtN(r.current_ytd),fmtPct(r.ytd_pct_change),r.trend||'—',fmtN(r.current_28d),fmtPct(r.recent_pct_change)]);
- document.getElementById('dominantCrimes').innerHTML=simpleTable(['Crime','All-period incidents','Share',city.current_year+' YTD','YTD %chg','YTD trend','Current 28D','28D %chg'],dc);
+ const dc=(crimeRecordsOverride||d.dominant_crimes||[]).map(r=>[r.crime,fmtN(r.incident_count),fmtShare(r.share),fmtN(r.current_ytd),fmtPct(r.ytd_pct_change),r.trend||'—',fmtN(r.current_28d),fmtPct(r.recent_pct_change)]);
+ document.getElementById('dominantCrimes').innerHTML=simpleTable(['Crime','All-period incidents','Share',city.current_year+' YTD','YTD %chg','YTD trend',customRange?'Custom Range':'Current 28D',customRange?'Range %chg':'28D %chg'],dc);
 
- const cr=(d.concerns||[]).map(r=>[r.crime,fmtN(r.previous_28d),fmtN(r.current_28d),fmtPct(r.pct_change_28d),fmtPct(r.city_pct_change_28d),fmtPct(r.ytd_pct_change),`<span class="signal ${{signalClass(r.signal)}}">${{r.signal}}</span>`]);
- document.getElementById('concernsTable').innerHTML=simpleTable(['Crime','Prev 28D','Current 28D','28D','City','YTD','Signal'],cr);
+ const cr=(concernsOverride||d.concerns||[]).map(r=>[r.crime,fmtN(r.previous_28d),fmtN(r.current_28d),fmtPct(r.pct_change_28d),fmtPct(r.city_pct_change_28d),fmtPct(r.ytd_pct_change),`<span class="signal ${{signalClass(r.signal)}}">${{r.signal}}</span>`]);
+ document.getElementById('concernsTable').innerHTML=simpleTable(['Crime',customRange?'Prev Range':'Prev 28D',customRange?'Current Range':'Current 28D',customRange?'Range %chg':'28D','City','YTD','Signal'],cr);
 
  const sh=(d.shift_summary||[]).map(r=>[r.shift,fmtN(r.incidents),r.dominant_offense,fmtN(r.dominant_offense_count),fmtShare(r.dominant_offense_share)]);
  document.getElementById('shiftSummary').innerHTML=simpleTable(['Shift','Incidents','Dominant crime','Dominant count','Share'],sh);
 
- const ds=(d.decision_summary||[]).map(r=>[r.purpose,fmtN(r.incidents),r.dominant_offense,fmtN(r.dominant_offense_count),fmtShare(r.dominant_offense_share)]);
+ const ds=(decisionOverride||d.decision_summary||[]).map(r=>[r.purpose,fmtN(r.incidents),r.dominant_offense,fmtN(r.dominant_offense_count),fmtShare(r.dominant_offense_share)]);
  document.getElementById('decisionSummary').innerHTML=simpleTable(['Decision purpose','Incidents','Dominant crime','Dominant count','Share'],ds);
 
  if(d.timing)document.getElementById('timingSummary').innerHTML=`<div class="metric-list"><div class="metric"><span class="note">Peak day</span><b>${{d.timing.peak_day}}</b></div><div class="metric"><span class="note">Peak hour</span><b>${{hourLabel(d.timing.peak_hour)}}</b></div><div class="metric"><span class="note">Busiest block</span><b>${{d.timing.peak_time_block}}</b></div><div class="metric"><span class="note">Dominant shift</span><b>${{d.timing.peak_shift}}</b></div></div>`;
@@ -4492,7 +4680,22 @@ function renderPrecinct(p){{
 }}
 
 function resetToCity(){{document.getElementById('cityPrompt').style.display='block';document.getElementById('precinctOverview').style.display='none';}}
-select.addEventListener('change',()=>{{let p=select.value;p?renderPrecinct(p):resetToCity();}});
+function clearCustomRange(){{customRange=null;const statusEl=document.getElementById('rangeStatus');if(statusEl)statusEl.textContent='';}}
+select.addEventListener('change',()=>{{clearCustomRange();let p=select.value;p?renderPrecinct(p):resetToCity();}});
+document.getElementById('rangeApplyBtn').addEventListener('click',()=>{{
+ const p=select.value;if(!p)return;
+ const ps=document.getElementById('rangePrevStart').value,pe=document.getElementById('rangePrevEnd').value;
+ const cs=document.getElementById('rangeCurrStart').value,ce=document.getElementById('rangeCurrEnd').value;
+ const statusEl=document.getElementById('rangeStatus');
+ if(!ps||!pe||!cs||!ce){{if(statusEl)statusEl.textContent='Choose all four dates before applying.';return;}}
+ if(ps>pe||cs>ce){{if(statusEl)statusEl.textContent='Each range needs a start on or before its end.';return;}}
+ customRange={{prevStart:ps,prevEnd:pe,currStart:cs,currEnd:ce}};
+ renderPrecinct(p);
+}});
+document.getElementById('rangeResetBtn').addEventListener('click',()=>{{
+ clearCustomRange();
+ const p=select.value;if(p)renderPrecinct(p);
+}});
 renderCity();resetToCity();
 </script>
 </body></html>"""
