@@ -32,7 +32,7 @@ th{color:#475569;font-size:.76rem} th:first-child,td:first-child{text-align:left
 <div class="eyebrow">Operational Control Center</div>
 <h1>Detroit Crime Operations</h1>
 <p class="sub">Data coverage: 2024 through 2026</p>
-<p class="note">Matched current-year comparisons use incidents through <b>2026-09-06</b>. Select a precinct to evaluate only the workload and geography that precinct controls.</p>
+<p class="note">Matched current-year comparisons use incidents through <b>2026-08-17</b>. Select a precinct to evaluate only the workload and geography that precinct controls.</p>
 
 <div class="cards" id="cityCards"></div>
 
@@ -104,7 +104,7 @@ th{color:#475569;font-size:.76rem} th:first-child,td:first-child{text-align:left
 
   <div class="section anchor-target" id="crimeSection">
     <h2>Dominant Crime Types — Selected Precinct</h2>
-    <div class="note">Full-period workload with current matched-YTD and recent 28-day direction beside it.</div>
+    <div class="note">Full-period workload with current matched-YTD and recent 14-day direction beside it.</div>
     <div id="dominantCrimes"></div>
   </div>
 
@@ -286,13 +286,19 @@ function renderPrecinct(p){
  document.getElementById('precinctCards').innerHTML=`
  <div class="card"><div class="label">${city.current_year} YTD incidents</div><div class="value">${fmtN(ov.incidents_current)}</div></div>
  <div class="card"><div class="label">vs ${city.previous_year} YTD</div><div class="value ${pctClass(ov.pct_change_vs_previous)}">${fmtPct(ov.pct_change_vs_previous)}</div></div>
- <div class="card"><div class="label">${customRange?'Custom current range':'Current 28 days'}</div><div class="value">${fmtN(rec.current_28d)}</div><div class="note ${pctClass(rec.pct_change_28d)}">${fmtPct(rec.pct_change_28d)} vs ${customRange?'custom previous range':'prior 28D'}</div></div>
+const recentUses14D = !customRange && rec.current_14d!==undefined;
+ const recentCurrent = recentUses14D ? rec.current_14d : rec.current_28d;
+ const recentPct = recentUses14D ? rec.pct_change_14d : rec.pct_change_28d;
+ const recentLabel = customRange ? 'Custom current range' : (recentUses14D ? 'Current 14 days' : 'Current 28 days');
+ const recentCompareLabel = customRange ? 'custom previous range' : (recentUses14D ? 'prior 14D' : 'prior 28D');
+ <div class="card"><div class="label">${recentLabel}</div><div class="value">${fmtN(recentCurrent)}</div><div class="note ${pctClass(recentPct)}">${fmtPct(recentPct)} vs ${recentCompareLabel}</div></div>
  <div class="card"><div class="label">Priority concerns</div><div class="value">${fmtN((concernsOverride||d.concerns||[]).length)}</div></div>
  <div class="card"><div class="label">Focus locations</div><div class="value">${fmtN((d.focus_locations||[]).length)}</div></div>`;
 
  let s=[];
  if(ov.pct_change_vs_previous!==null&&ov.pct_change_vs_previous!==undefined)s.push(`Overall matched-YTD incidents are ${Math.abs(Number(ov.pct_change_vs_previous)).toFixed(1)}% ${Number(ov.pct_change_vs_previous)<0?'below':'above'} ${city.previous_year}.`);
- if(rec.pct_change_28d!==null&&rec.pct_change_28d!==undefined)s.push(`Recent activity moved from ${fmtN(rec.previous_28d)} to ${fmtN(rec.current_28d)} incidents (${fmtPct(rec.pct_change_28d)}).`);
+const recentPrevious = recentUses14D ? rec.previous_14d : rec.previous_28d;
+ if(recentPct!==null&&recentPct!==undefined)s.push(`Recent activity moved from ${fmtN(recentPrevious)} to ${fmtN(recentCurrent)} incidents (${fmtPct(recentPct)}).`);
  const concernsForBrief=concernsOverride||d.concerns;
  if(concernsForBrief&&concernsForBrief.length)s.push(`${concernsForBrief[0].crime} is the leading current attention signal (${concernsForBrief[0].signal}).`);
  if(d.timing)s.push(`Recent activity peaks on ${d.timing.peak_day} around ${hourLabel(d.timing.peak_hour)}, with ${d.timing.peak_time_block} as the busiest broad time block.`);
@@ -306,8 +312,8 @@ function renderPrecinct(p){
    assetLink(a.shift_chart,'Open Shift Summary Chart'),
    assetLink(a.decision_chart,'Open Decision Purpose Chart'),
    assetLink(a.monthly_heatmap,'Open Precinct Monthly Trend Heatmap'),
-   assetLink(a.violent_type_chart,'Open Violent Crime 28-Day Type Breakdown'),
-   assetLink(a.violent_day_hour,'Open Violent Crime 28-Day Day/Hour')
+   assetLink(a.violent_type_chart,(a.violent_type_chart||'').includes('_14d_')?'Open Violent Crime 14-Day Type Breakdown':'Open Violent Crime 28-Day Type Breakdown'),
+   assetLink(a.violent_day_hour,(a.violent_day_hour||'').includes('_14d_')?'Open Violent Crime 14-Day Day/Hour':'Open Violent Crime 28-Day Day/Hour')
  ].filter(Boolean).join('');
  document.getElementById('modernLinks').innerHTML=[
    assetLink(analysisUrl(p,'trends'),'Open Crime Trend Analysis'),
@@ -340,11 +346,23 @@ function renderPrecinct(p){
  document.getElementById('worseningDrivers').innerHTML=simpleTable(['Crime',city.previous_year,city.current_year,'% change','Trend'],wd);
  document.getElementById('improvingDrivers').innerHTML=simpleTable(['Crime',city.previous_year,city.current_year,'% change','Trend'],id);
 
- const dc=(crimeRecordsOverride||d.dominant_crimes||[]).map(r=>[r.crime,fmtN(r.incident_count),fmtShare(r.share),fmtN(r.current_ytd),fmtPct(r.ytd_pct_change),r.trend||'—',fmtN(r.current_28d),fmtPct(r.recent_pct_change)]);
- document.getElementById('dominantCrimes').innerHTML=simpleTable(['Crime','All-period incidents','Share',city.current_year+' YTD','YTD %chg','YTD trend',customRange?'Custom Range':'Current 28D',customRange?'Range %chg':'28D %chg'],dc);
+ const dc=(crimeRecordsOverride||d.dominant_crimes||[]).map(r=>{
+   const use14=!customRange && r.current_14d!==undefined;
+   return [r.crime,fmtN(r.incident_count),fmtShare(r.share),fmtN(r.current_ytd),fmtPct(r.ytd_pct_change),r.trend||'—',fmtN(use14?r.current_14d:r.current_28d),fmtPct(r.recent_pct_change)];
+ });
+ document.getElementById('dominantCrimes').innerHTML=simpleTable(
+   ['Crime','All-period incidents','Share',city.current_year+' YTD','YTD %chg','YTD trend',customRange?'Custom Range':(recentUses14D?'Current 14D':'Current 28D'),customRange?'Range %chg':(recentUses14D?'14D %chg':'28D %chg')],
+   dc
+ );
 
- const cr=(concernsOverride||d.concerns||[]).map(r=>[r.crime,fmtN(r.previous_28d),fmtN(r.current_28d),fmtPct(r.pct_change_28d),fmtPct(r.city_pct_change_28d),fmtPct(r.ytd_pct_change),`<span class="signal ${signalClass(r.signal)}">${r.signal}</span>`]);
- document.getElementById('concernsTable').innerHTML=simpleTable(['Crime',customRange?'Prev Range':'Prev 28D',customRange?'Current Range':'Current 28D',customRange?'Range %chg':'28D','City','YTD','Signal'],cr);
+ const cr=(concernsOverride||d.concerns||[]).map(r=>{
+   const use14=!customRange && r.current_14d!==undefined;
+   return [r.crime,fmtN(use14?r.previous_14d:r.previous_28d),fmtN(use14?r.current_14d:r.current_28d),fmtPct(use14?r.pct_change_14d:r.pct_change_28d),fmtPct(use14?r.city_pct_change_14d:r.city_pct_change_28d),fmtPct(r.ytd_pct_change),`<span class="signal ${signalClass(r.signal)}">${r.signal}</span>`];
+ });
+ document.getElementById('concernsTable').innerHTML=simpleTable(
+   ['Crime',customRange?'Prev Range':(recentUses14D?'Prev 14D':'Prev 28D'),customRange?'Current Range':(recentUses14D?'Current 14D':'Current 28D'),customRange?'Range %chg':(recentUses14D?'14D':'28D'),'City','YTD','Signal'],
+   cr
+ );
 
  const sh=(d.shift_summary||[]).map(r=>[r.shift,fmtN(r.incidents),r.dominant_offense,fmtN(r.dominant_offense_count),fmtShare(r.dominant_offense_share)]);
  document.getElementById('shiftSummary').innerHTML=simpleTable(['Shift','Incidents','Dominant crime','Dominant count','Share'],sh);

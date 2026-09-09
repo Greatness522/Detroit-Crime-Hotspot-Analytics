@@ -29,6 +29,8 @@ DATASET_DIR = BASE_DIR / "Dataset"
 DATASET_GLOB = "RMS_Crime_Incidents_*.csv"
 IMAGES_DIR = BASE_DIR / "Images"
 DOCS_DIR = BASE_DIR / "Documentation"
+RECENT_WINDOW_DAYS = 14
+RECENT_WINDOW_LABEL = f"{RECENT_WINDOW_DAYS}D"
 
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 DOCS_DIR.mkdir(parents=True, exist_ok=True)
@@ -88,7 +90,9 @@ def load_data(dataset_dir: Path) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Dataset is missing required columns: {missing}")
 
+    df["neighborhood"] = df["neighborhood"].fillna("").astype(str).str.strip()
     df = df.dropna(subset=required_cols).copy()
+    df = df[df["neighborhood"].ne("")].copy()
     df = df[(df["latitude"].between(42.2, 42.5)) & (df["longitude"].between(-83.3, -82.9))]
     if "incident_hour_of_day" in df.columns:
         df["incident_hour_of_day"] = pd.to_numeric(df["incident_hour_of_day"], errors="coerce")
@@ -111,6 +115,20 @@ def load_data(dataset_dir: Path) -> pd.DataFrame:
     df["is_larceny_related"] = category.eq("LARCENY")
 
     return df
+
+
+def add_neighborhood_scopes(
+    df: pd.DataFrame,
+    citywide: pd.DataFrame,
+    build_scoped,
+) -> pd.DataFrame:
+    """Append records calculated independently for every cleaned neighborhood."""
+    frames = [citywide.assign(neighborhood_scope="ALL")]
+    for neighborhood, subset in df.groupby("neighborhood", sort=True):
+        scoped = build_scoped(subset.copy())
+        if not scoped.empty:
+            frames.append(scoped.assign(neighborhood_scope=str(neighborhood)))
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
 def assign_shift_window(hour: float) -> str:
@@ -161,15 +179,17 @@ def assign_shift_window(hour: float) -> str:
 def add_top_selector_panel(
     m: folium.Map,
     precinct_values: list[str],
+    neighborhood_values: list[str],
     crime_type_values: list[str],
     precinct_improvement: pd.DataFrame | None = None,
     precinct_crime_trends: pd.DataFrame | None = None,
-    precinct_crime_28d: pd.DataFrame | None = None,
+    precinct_crime_14d: pd.DataFrame | None = None,
     priority_concerns: pd.DataFrame | None = None,
     temporal_summary: pd.DataFrame | None = None,
     temporal_matrix: pd.DataFrame | None = None,
     hotspot_change: pd.DataFrame | None = None,
     precinct_bounds: dict[str, list[list[float]]] | None = None,
+    neighborhood_bounds: dict[str, list[list[float]]] | None = None,
     current_year: int | None = None,
     previous_year: int | None = None,
     baseline_year: int | None = None,
@@ -184,9 +204,14 @@ def add_top_selector_panel(
         and str(p).strip().upper() not in invalid_precinct_codes
     ]
     crime_types = [str(c) for c in crime_type_values if isinstance(c, str) and c.strip()]
+    neighborhoods = sorted({str(n).strip() for n in neighborhood_values if str(n).strip()})
 
     precinct_options = "".join(
         [f'<option value="{html.escape(p, quote=True)}">{html.escape(p)}</option>' for p in precincts]
+    )
+    neighborhood_options = "".join(
+        f'<option value="{html.escape(n, quote=True)}">{html.escape(n)}</option>'
+        for n in neighborhoods
     )
 
     category_options = [
@@ -214,11 +239,13 @@ def add_top_selector_panel(
     overall_data = {}
     if precinct_improvement is not None and not precinct_improvement.empty:
         for _, row in precinct_improvement.iterrows():
-            key = str(row.get("precinct_norm", ""))
-            if not key:
+            precinct = str(row.get("precinct_norm", ""))
+            scope = str(row.get("neighborhood_scope", "ALL"))
+            if not precinct:
                 continue
-            overall_data[key] = {
-                "precinct": key,
+            overall_data[f"{precinct}|{scope}"] = {
+                "precinct": precinct,
+                "neighborhood_scope": scope,
                 "incidents_baseline": clean_number(row.get("incidents_baseline")),
                 "incidents_previous": clean_number(row.get("incidents_previous")),
                 "incidents_current": clean_number(row.get("incidents_current")),
@@ -231,6 +258,7 @@ def add_top_selector_panel(
     crime_trend_records = []
     if precinct_crime_trends is not None and not precinct_crime_trends.empty:
         wanted = [
+            "neighborhood_scope",
             "precinct_norm",
             "offense_category",
             "incidents_baseline",
@@ -249,23 +277,24 @@ def add_top_selector_panel(
             rec["comparison_date"] = str(row.get("comparison_date", ""))
             crime_trend_records.append(rec)
 
-    crime_28d_records = []
-    if precinct_crime_28d is not None and not precinct_crime_28d.empty:
-        wanted_28d = [
+    crime_14d_records = []
+    if precinct_crime_14d is not None and not precinct_crime_14d.empty:
+        wanted_14d = [
+            "neighborhood_scope",
             "precinct_norm",
             "offense_category",
-            "previous_28d",
-            "current_28d",
-            "pct_change_28d",
+            "previous_14d",
+            "current_14d",
+            "pct_change_14d",
             "recent_movement",
-            "city_pct_change_28d",
-            "previous_28d_start",
-            "previous_28d_end",
-            "current_28d_start",
-            "current_28d_end",
+            "city_pct_change_14d",
+            "previous_14d_start",
+            "previous_14d_end",
+            "current_14d_start",
+            "current_14d_end",
         ]
-        for _, row in precinct_crime_28d.iterrows():
-            rec = {col: clean_number(row.get(col)) for col in wanted_28d}
+        for _, row in precinct_crime_14d.iterrows():
+            rec = {col: clean_number(row.get(col)) for col in wanted_14d}
             # CSVs can coerce 02 -> 2, so normalize here for dashboard matching.
             pval = row.get("precinct_norm", "")
             if pd.isna(pval):
@@ -276,21 +305,22 @@ def add_top_selector_panel(
             rec["precinct_norm"] = pkey
             rec["offense_category"] = str(row.get("offense_category", ""))
             rec["recent_movement"] = str(row.get("recent_movement", "Unknown"))
-            for col in ["previous_28d_start", "previous_28d_end", "current_28d_start", "current_28d_end"]:
+            for col in ["previous_14d_start", "previous_14d_end", "current_14d_start", "current_14d_end"]:
                 rec[col] = str(row.get(col, ""))
-            crime_28d_records.append(rec)
+            crime_14d_records.append(rec)
 
     priority_records = []
     if priority_concerns is not None and not priority_concerns.empty:
         wanted_priority = [
+            "neighborhood_scope",
             "precinct_norm",
             "offense_category",
-            "previous_28d",
-            "current_28d",
-            "change_28d",
-            "pct_change_28d",
-            "city_pct_change_28d",
-            "city_gap_28d",
+            "previous_14d",
+            "current_14d",
+            "change_14d",
+            "pct_change_14d",
+            "city_pct_change_14d",
+            "city_gap_14d",
             "pct_change_vs_previous",
             "priority_score",
             "priority_signal",
@@ -313,7 +343,7 @@ def add_top_selector_panel(
         for _, row in temporal_summary.iterrows():
             rec = {}
             for col in [
-                "period", "precinct_norm", "selection_type", "selection_name",
+                "period", "precinct_norm", "neighborhood_scope", "selection_type", "selection_name",
                 "total_incidents", "peak_day", "peak_day_count", "peak_hour",
                 "peak_hour_count", "peak_shift", "peak_shift_count",
                 "peak_time_block", "peak_time_block_count", "period_start", "period_end",
@@ -333,6 +363,7 @@ def add_top_selector_panel(
             rec = {
                 "period": str(row.get("period", "")),
                 "precinct_norm": str(row.get("precinct_norm", "")),
+                "neighborhood_scope": str(row.get("neighborhood_scope", "ALL")),
                 "selection_type": str(row.get("selection_type", "")),
                 "selection_name": str(row.get("selection_name", "")),
                 "weekday": str(row.get("weekday", "")),
@@ -344,26 +375,26 @@ def add_top_selector_panel(
     hotspot_change_records = []
     if hotspot_change is not None and not hotspot_change.empty:
         wanted_hotspot = [
-            "precinct_norm", "selection_type", "selection_name", "h3_cell",
-            "previous_28d", "current_28d", "change_28d", "pct_change_28d",
+            "precinct_norm", "neighborhood_scope", "selection_type", "selection_name", "h3_cell",
+            "previous_14d", "current_14d", "change_14d", "pct_change_14d",
             "hotspot_status", "hotspot_score", "previous_hotspot_threshold",
             "current_hotspot_threshold", "neighborhood", "nearest_intersection",
-            "latitude", "longitude", "previous_28d_start", "previous_28d_end",
-            "current_28d_start", "current_28d_end",
+            "latitude", "longitude", "previous_14d_start", "previous_14d_end",
+            "current_14d_start", "current_14d_end",
         ]
         for _, row in hotspot_change.iterrows():
             rec = {col: clean_number(row.get(col)) for col in wanted_hotspot}
             for col in [
-                "precinct_norm", "selection_type", "selection_name", "h3_cell",
+                "precinct_norm", "neighborhood_scope", "selection_type", "selection_name", "h3_cell",
                 "hotspot_status", "neighborhood", "nearest_intersection",
-                "previous_28d_start", "previous_28d_end", "current_28d_start", "current_28d_end",
+                "previous_14d_start", "previous_14d_end", "current_14d_start", "current_14d_end",
             ]:
                 rec[col] = str(row.get(col, ""))
             hotspot_change_records.append(rec)
 
     overall_json = json.dumps(overall_data, ensure_ascii=False).replace("</", "<\\/")
     crime_trend_json = json.dumps(crime_trend_records, ensure_ascii=False).replace("</", "<\\/")
-    crime_28d_json = json.dumps(crime_28d_records, ensure_ascii=False).replace("</", "<\\/")
+    crime_14d_json = json.dumps(crime_14d_records, ensure_ascii=False).replace("</", "<\\/")
     priority_json = json.dumps(priority_records, ensure_ascii=False).replace("</", "<\\/")
     temporal_summary_json = json.dumps(temporal_summary_records, ensure_ascii=False).replace("</", "<\\/")
     temporal_matrix_json = json.dumps(temporal_matrix_records, ensure_ascii=False).replace("</", "<\\/")
@@ -376,6 +407,7 @@ def add_top_selector_panel(
     }
     year_json = json.dumps(year_labels)
     precinct_bounds_json = json.dumps(precinct_bounds or {}, ensure_ascii=False)
+    neighborhood_bounds_json = json.dumps(neighborhood_bounds or {}, ensure_ascii=False)
 
     panel_html = f"""
     <style>
@@ -418,13 +450,16 @@ def add_top_selector_panel(
         <div style="min-width:180px;flex:1;"><div style="font-weight:800;margin-bottom:4px;">Precinct / Responsibility</div>
           <select id="cpPrecinctSelect" style="width:100%;padding:7px;border:1px solid #94a3b8;border-radius:6px;font-weight:700;">
             <option value="">Detroit Overview</option>{precinct_options}</select></div>
+                <div style="min-width:220px;flex:2;"><div style="font-weight:800;margin-bottom:4px;">Neighborhood</div>
+                    <select id="cpNeighborhoodSelect" style="width:100%;padding:7px;border:1px solid #94a3b8;border-radius:6px;">
+                        <option value="">All Neighborhoods</option>{neighborhood_options}</select></div>
         <div style="min-width:300px;flex:3;"><div style="font-weight:800;margin-bottom:4px;">Crime / Category</div>
           <select id="cpCategorySelect" style="width:100%;padding:7px;border:1px solid #94a3b8;border-radius:6px;">
             <option value="">All Crime</option>{category_options_html}</select></div>
         <div style="min-width:190px;flex:1;"><div style="font-weight:800;margin-bottom:4px;">Analysis View</div>
           <select id="cpPeriodSelect" style="width:100%;padding:7px;border:1px solid #94a3b8;border-radius:6px;">
             <option value="Operational">Operational Summary</option>
-            <option value="Recent">Recent 28-Day Emphasis</option>
+            <option value="Recent">Recent 14-Day Emphasis</option>
             <option value="YTD">Matched YTD Emphasis</option>
           </select></div>
         <div style="display:flex;gap:6px;align-items:center;">
@@ -455,7 +490,7 @@ def add_top_selector_panel(
               <option value="Decision | Investigations Priority">Investigations</option>
               <option value="Decision | Community Response Priority">Community Response</option>
             </select></div>
-          <div style="color:#64748b;font-size:11px;max-width:270px;">Use the Leaflet layer button at the upper-right of the map for the optional latest-28-day incident point layer and alternate basemaps.</div>
+          <div style="color:#64748b;font-size:11px;max-width:270px;">Use the Leaflet layer button at the upper-right of the map for the optional latest-14-day incident point layer and alternate basemaps.</div>
         </div>
       </details>
       <div id="cpSelectorStatus" style="margin-top:8px;font-size:11px;color:#334155;">Detroit Overview | All Crime | Operational Summary</div>
@@ -464,24 +499,24 @@ def add_top_selector_panel(
         <div class="exec-title">Executive Summary</div><div style="margin-top:3px;color:#64748b;">Select a precinct and/or crime type to generate a concise what–when–where–change summary.</div>
       </div>
       <div id="cpPriorityCard" style="margin-top:8px;padding:8px 10px;border:1px solid #fed7aa;border-radius:8px;background:#fff7ed;">
-        <b>Priority / Emerging Concerns</b><div style="margin-top:3px;color:#64748b;">Ranks crime signals using recent volume, absolute change, 28-day percentage change, citywide divergence, and YTD direction. Small baselines are kept visible but do not rank on percentage alone.</div>
+        <b>Priority / Emerging Concerns</b><div style="margin-top:3px;color:#64748b;">Ranks crime signals using recent volume, absolute change, 14-day percentage change, citywide divergence, and YTD direction. Small baselines are kept visible but do not rank on percentage alone.</div>
       </div>
       <div id="cpTimingCard" style="margin-top:8px;padding:8px 10px;border:1px solid #bae6fd;border-radius:8px;background:#f0f9ff;">
-        <b>When is it happening?</b><div style="margin-top:3px;color:#64748b;">Shows peak day, hour, shift, and day/time concentration for the current selection, with YTD context and the latest 28 days.</div>
+        <b>When is it happening?</b><div style="margin-top:3px;color:#64748b;">Shows peak day, hour, shift, and day/time concentration for the current selection, with YTD context and the latest 14 days.</div>
       </div>
       <div id="cpHotspotCard" style="margin-top:8px;padding:8px 10px;border:1px solid #ddd6fe;border-radius:8px;background:#faf5ff;">
-        <b>Where is it changing?</b><div style="margin-top:3px;color:#64748b;">Compares H3 hotspot locations across consecutive 28-day periods and identifies persistent, new, emerging, and declining concentrations for the current selection.</div>
+        <b>Where is it changing?</b><div style="margin-top:3px;color:#64748b;">Compares H3 hotspot locations across consecutive 14-day periods and identifies persistent, new, emerging, and declining concentrations for the current selection.</div>
       </div>
       <div id="cpTrendCard" style="margin-top:8px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc;">
-        Select a precinct and/or crime type to see matched YTD trend details and recent 28-day movement. Citywide results are context; precinct results are the operational workload.
+        Select a precinct and/or crime type to see matched YTD trend details and recent 14-day movement. Citywide results are context; precinct results are the operational workload.
       </div>
-      <div style="margin-top:4px;font-size:11px;color:#64748b;">YTD Trend uses the latest current-year incident date as the cutoff and compares the same calendar period in prior years. ±2% is treated as Stable. Recent movement compares the latest 28 days with the immediately preceding 28 days.</div>
+      <div style="margin-top:4px;font-size:11px;color:#64748b;">YTD Trend uses the latest current-year incident date as the cutoff and compares the same calendar period in prior years. ±2% is treated as Stable. Recent movement compares the latest 14 days with the immediately preceding 14 days.</div>
     </div>
     <script>
     (function() {{
       var overallData = {overall_json};
       var crimeTrendData = {crime_trend_json};
-      var crime28dData = {crime_28d_json};
+      var crime14dData = {crime_14d_json};
       var priorityData = {priority_json};
       var temporalSummaryData = {temporal_summary_json};
       var temporalMatrixData = {temporal_matrix_json};
@@ -489,6 +524,7 @@ def add_top_selector_panel(
       var mapObjectName = "{m.get_name()}";
       var years = {year_json};
       var precinctBounds = {precinct_bounds_json};
+    var neighborhoodBounds = {neighborhood_bounds_json};
 
       function normalizeLayerName(text) {{ var clean=(text||'').trim(); var idx=clean.lastIndexOf(' ('); return idx>0?clean.slice(0,idx).trim():clean; }}
       function eachOverlayCheckbox(callback) {{ document.querySelectorAll('.leaflet-control-layers-overlays label').forEach(function(label) {{ var cb=label.querySelector('input[type="checkbox"]'); if(cb) callback(cb,(label.innerText||'').trim(),normalizeLayerName(label.innerText||'')); }}); }}
@@ -499,27 +535,30 @@ def add_top_selector_panel(
       function trendClassName(t) {{ if((t||'').includes('Improving')) return 'trend-down'; if((t||'').includes('Worsening')) return 'trend-up'; return 'trend-stable'; }}
       function trendMatches(actual, requested) {{ if(!requested) return true; if(requested==='Improving') return actual==='Improving'||actual==='Consistently Improving'; if(requested==='Worsening') return actual==='Worsening'||actual==='Consistently Worsening'; return actual===requested; }}
       function selectedCrime() {{ var raw=(document.getElementById('cpCategorySelect')||{{value:''}}).value; return raw.startsWith('Crime Type | ')?raw.replace('Crime Type | ',''):''; }}
-      function rowsFor(precinct, crime, trend) {{ return crimeTrendData.filter(function(r) {{ return (!precinct||r.precinct_norm===precinct) && (!crime||r.offense_category===crime) && trendMatches(r.trend_class,trend); }}); }}
-      function rows28For(precinct, crime) {{ return crime28dData.filter(function(r) {{ return (!precinct||r.precinct_norm===precinct) && (!crime||r.offense_category===crime); }}); }}
+    function selectedNeighborhood() {{ return (document.getElementById('cpNeighborhoodSelect')||{{value:''}}).value; }}
+    function scopedRecord(r) {{ var neighborhood=selectedNeighborhood(); return r.neighborhood_scope===(neighborhood||'ALL'); }}
+    function overallFor(precinct) {{ return overallData[precinct+'|'+(selectedNeighborhood()||'ALL')]; }}
+    function rowsFor(precinct, crime, trend) {{ return crimeTrendData.filter(function(r) {{ return scopedRecord(r) && (!precinct||r.precinct_norm===precinct) && (!crime||r.offense_category===crime) && trendMatches(r.trend_class,trend); }}); }}
+    function rows28For(precinct, crime) {{ return crime14dData.filter(function(r) {{ return scopedRecord(r) && (!precinct||r.precinct_norm===precinct) && (!crime||r.offense_category===crime); }}); }}
       function recentClassName(t) {{ if(t==='Increasing') return 'trend-up'; if(t==='Decreasing') return 'trend-down'; return 'trend-stable'; }}
       function recentTableHtml(rows, firstCol, firstLabel, limit) {{
-        var use=rows.slice(0,limit||12); if(!use.length) return '<div style="color:#64748b;">No 28-day comparison records for this selection.</div>';
-        var h='<table><thead><tr><th>'+firstLabel+'</th><th>Previous 28D</th><th>Current 28D</th><th>28D %chg</th><th>City %chg</th><th>Recent</th></tr></thead><tbody>';
-        use.forEach(function(r) {{ h+='<tr><td>'+r[firstCol]+'</td><td>'+fmtN(r.previous_28d)+'</td><td>'+fmtN(r.current_28d)+'</td><td>'+fmtPct(r.pct_change_28d)+'</td><td>'+fmtPct(r.city_pct_change_28d)+'</td><td class="'+recentClassName(r.recent_movement)+'">'+r.recent_movement+'</td></tr>'; }});
+        var use=rows.slice(0,limit||12); if(!use.length) return '<div style="color:#64748b;">No 14-day comparison records for this selection.</div>';
+        var h='<table><thead><tr><th>'+firstLabel+'</th><th>Previous 14D</th><th>Current 14D</th><th>14D %chg</th><th>City %chg</th><th>Recent</th></tr></thead><tbody>';
+        use.forEach(function(r) {{ h+='<tr><td>'+r[firstCol]+'</td><td>'+fmtN(r.previous_14d)+'</td><td>'+fmtN(r.current_14d)+'</td><td>'+fmtPct(r.pct_change_14d)+'</td><td>'+fmtPct(r.city_pct_change_14d)+'</td><td class="'+recentClassName(r.recent_movement)+'">'+r.recent_movement+'</td></tr>'; }});
         return h+'</tbody></table>';
       }}
-      function recentWindowText(rows) {{ if(!rows.length) return ''; var r=rows[0]; return ' | Recent window '+r.current_28d_start+' to '+r.current_28d_end+' vs '+r.previous_28d_start+' to '+r.previous_28d_end; }}
+      function recentWindowText(rows) {{ if(!rows.length) return ''; var r=rows[0]; return ' | Recent window '+r.current_14d_start+' to '+r.current_14d_end+' vs '+r.previous_14d_start+' to '+r.previous_14d_end; }}
       function interpretationHtml(ytdRows, recentRows, precinct, crime) {{
         if(!ytdRows.length || !recentRows.length) return '';
         var y=ytdRows[0], r=recentRows[0];
-        var recent=Number(r.pct_change_28d), city=Number(r.city_pct_change_28d), ytd=Number(y.pct_change_vs_previous);
+        var recent=Number(r.pct_change_14d), city=Number(r.city_pct_change_14d), ytd=Number(y.pct_change_vs_previous);
         var recentValid=!Number.isNaN(recent), cityValid=!Number.isNaN(city), ytdValid=!Number.isNaN(ytd);
         var signal='MIXED', cls='trend-stable';
         if(recentValid && recent < -2) {{ signal='IMPROVING'; cls='trend-down'; }}
         else if(recentValid && recent > 2) {{ signal='WORSENING'; cls='trend-up'; }}
         else if(recentValid) {{ signal='STABLE'; cls='trend-stable'; }}
         var subject='Recent '+crime.toLowerCase()+' incidents in Precinct '+precinct;
-        var text=subject+' '+(recent<0?'decreased ':'increased ')+(recent<0?Math.abs(recent).toFixed(1)+'%':fmtPct(recent))+ ' ('+fmtN(r.previous_28d)+' → '+fmtN(r.current_28d)+')';
+        var text=subject+' '+(recent<0?'decreased ':'increased ')+(recent<0?Math.abs(recent).toFixed(1)+'%':fmtPct(recent))+ ' ('+fmtN(r.previous_14d)+' → '+fmtN(r.current_14d)+')';
         if(cityValid) text+=', compared with a citywide change of '+fmtPct(city);
         if(ytdValid) text+=', while the precinct is '+fmtPct(ytd)+' versus '+years.previous+' YTD';
         var relative='';
@@ -537,11 +576,11 @@ def add_top_selector_panel(
         return h+'</tbody></table>';
       }}
       function priorityClassName(t) {{ if(t==='High Priority') return 'priority-high'; if(t==='Emerging Concern') return 'priority-emerging'; if(t==='Watch') return 'priority-watch'; if(t==='Recent Improvement') return 'priority-improving'; return 'trend-stable'; }}
-      function priorityRowsFor(precinct, crime) {{ return priorityData.filter(function(r) {{ return (!precinct||r.precinct_norm===precinct) && (!crime||r.offense_category===crime); }}); }}
+    function priorityRowsFor(precinct, crime) {{ return priorityData.filter(function(r) {{ return scopedRecord(r) && (!precinct||r.precinct_norm===precinct) && (!crime||r.offense_category===crime); }}); }}
       function priorityTableHtml(rows, limit) {{
         var use=rows.slice(0,limit||8); if(!use.length) return '<div style="color:#64748b;margin-top:4px;">No priority signals for this selection.</div>';
-        var h='<table><thead><tr><th>Precinct / Crime</th><th>Prev 28D</th><th>Current 28D</th><th>Abs Δ</th><th>28D %chg</th><th>City %chg</th><th>YTD %chg</th><th>Score</th><th>Signal</th></tr></thead><tbody>';
-        use.forEach(function(r) {{ var label='P'+r.precinct_norm+' — '+r.offense_category; h+='<tr><td>'+label+'</td><td>'+fmtN(r.previous_28d)+'</td><td>'+fmtN(r.current_28d)+'</td><td>'+fmtN(r.change_28d)+'</td><td>'+fmtPct(r.pct_change_28d)+'</td><td>'+fmtPct(r.city_pct_change_28d)+'</td><td>'+fmtPct(r.pct_change_vs_previous)+'</td><td>'+Number(r.priority_score||0).toFixed(1)+'</td><td class="'+priorityClassName(r.priority_signal)+'">'+r.priority_signal+'</td></tr>'; }});
+        var h='<table><thead><tr><th>Precinct / Crime</th><th>Prev 14D</th><th>Current 14D</th><th>Abs Δ</th><th>14D %chg</th><th>City %chg</th><th>YTD %chg</th><th>Score</th><th>Signal</th></tr></thead><tbody>';
+        use.forEach(function(r) {{ var label='P'+r.precinct_norm+' — '+r.offense_category; h+='<tr><td>'+label+'</td><td>'+fmtN(r.previous_14d)+'</td><td>'+fmtN(r.current_14d)+'</td><td>'+fmtN(r.change_14d)+'</td><td>'+fmtPct(r.pct_change_14d)+'</td><td>'+fmtPct(r.city_pct_change_14d)+'</td><td>'+fmtPct(r.pct_change_vs_previous)+'</td><td>'+Number(r.priority_score||0).toFixed(1)+'</td><td class="'+priorityClassName(r.priority_signal)+'">'+r.priority_signal+'</td></tr>'; }});
         return h+'</tbody></table>';
       }}
       function scopeDisplayLabel(precinct,scope) {{
@@ -559,16 +598,16 @@ def add_top_selector_panel(
         var card=document.getElementById('cpExecutiveCard'); if(!card) return;
         var bullets=[]; var signal='MONITOR';
 
-        // Change: use matched YTD + recent 28-day movement when the scope supports it.
+        // Change: use matched YTD + recent 14-day movement when the scope supports it.
         if(precinct && crime) {{
           var yrows=rowsFor(precinct,crime,''); var rrows=rows28For(precinct,crime);
           if(yrows.length) bullets.push('<b>Long-term:</b> '+crime+' is <span class="'+trendClassName(yrows[0].trend_class)+'">'+yrows[0].trend_class+'</span> YTD ('+fmtPct(yrows[0].pct_change_vs_previous)+' vs '+years.previous+').');
           if(rrows.length) {{
-            var rr=rrows[0]; bullets.push('<b>Recent:</b> '+fmtN(rr.previous_28d)+' → '+fmtN(rr.current_28d)+' in consecutive 28-day periods ('+fmtPct(rr.pct_change_28d)+'), versus '+fmtPct(rr.city_pct_change_28d)+' citywide.');
-            if(Number(rr.pct_change_28d)<-2) signal='IMPROVING'; else if(Number(rr.pct_change_28d)>2) signal='WORSENING';
+            var rr=rrows[0]; bullets.push('<b>Recent:</b> '+fmtN(rr.previous_14d)+' → '+fmtN(rr.current_14d)+' in consecutive 14-day periods ('+fmtPct(rr.pct_change_14d)+'), versus '+fmtPct(rr.city_pct_change_14d)+' citywide.');
+            if(Number(rr.pct_change_14d)<-2) signal='IMPROVING'; else if(Number(rr.pct_change_14d)>2) signal='WORSENING';
           }}
         }} else if(precinct && scope.type==='All') {{
-          var ov=overallData[precinct];
+          var ov=overallFor(precinct);
           if(ov) bullets.push('<b>Long-term:</b> Precinct '+precinct+' is <span class="'+trendClassName(ov.trend_class)+'">'+ov.trend_class+'</span> overall ('+fmtPct(ov.pct_change_vs_previous)+' vs '+years.previous+' YTD; data through '+ov.comparison_date+').');
         }} else if(scope.type==='Category Focus') {{
           bullets.push('<b>Scope:</b> '+scope.name+' is a record-level category focus. Timing and hotspot findings below use only records in that focus; offense-level YTD tables remain separate.');
@@ -584,8 +623,8 @@ def add_top_selector_panel(
           }}
         }}
 
-        // When: latest 28-day timing profile for the exact current map-analysis scope.
-        var recent=timingSummary('Recent 28D',precinct,scope);
+        // When: latest 14-day timing profile for the exact current map-analysis scope.
+        var recent=timingSummary('Recent 14D',precinct,scope);
         if(recent) bullets.push('<b>When:</b> Peak day is '+recent.peak_day+', peak hour '+hourLabel(recent.peak_hour)+', with '+recent.peak_time_block+' as the busiest time block and '+recent.peak_shift+' as the dominant shift.');
 
         // Where: summarize hotspot state without repeating the detail table.
@@ -594,7 +633,7 @@ def add_top_selector_panel(
           var ne=hrows.filter(function(r){{return r.hotspot_status==='New Hotspot'||r.hotspot_status==='Emerging Hotspot';}}).length;
           var pe=hrows.filter(function(r){{return r.hotspot_status==='Persistent Hotspot';}}).length;
           var de=hrows.filter(function(r){{return r.hotspot_status==='Declining Hotspot';}}).length;
-          bullets.push('<b>Where:</b> '+ne+' new/emerging, '+pe+' persistent, and '+de+' declining hotspot cells in the latest 28-day comparison.');
+          bullets.push('<b>Where:</b> '+ne+' new/emerging, '+pe+' persistent, and '+de+' declining hotspot cells in the latest 14-day comparison.');
         }}
 
         if(!bullets.length) bullets.push('Choose a precinct and/or category/crime type to create a focused operational summary.');
@@ -610,15 +649,15 @@ def add_top_selector_panel(
           strip.innerHTML='<div style="grid-column:1/-1;padding:8px 10px;border:1px solid #dbeafe;border-radius:8px;background:#eff6ff;color:#1e3a8a;"><b>Detroit Overview:</b> choose a precinct to switch into a responsibility-focused operational view. Citywide values remain comparison context, not the precinct workload.</div>';
           return;
         }}
-        var ov=overallData[precinct];
+        var ov=overallFor(precinct);
         var recent=rows28For(precinct,'');
-        var prev=0,curr=0; recent.forEach(function(r){{prev+=Number(r.previous_28d||0);curr+=Number(r.current_28d||0);}});
+        var prev=0,curr=0; recent.forEach(function(r){{prev+=Number(r.previous_14d||0);curr+=Number(r.current_14d||0);}});
         var rpct=prev>0?100*(curr-prev)/prev:null;
         var actionable=priorityRowsFor(precinct,'').filter(function(r){{return r.priority_signal==='High Priority'||r.priority_signal==='Emerging Concern'||r.priority_signal==='Watch';}}).length;
         function k(label,value,sub){{return '<div style="border:1px solid #dbeafe;border-radius:8px;padding:7px 9px;background:#f8fbff;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;font-weight:700;">'+label+'</div><div style="font-size:18px;font-weight:800;color:#0f172a;margin-top:2px;">'+value+'</div><div style="font-size:10px;color:#64748b;">'+sub+'</div></div>';}}
         strip.innerHTML=k('YTD incidents',ov?fmtN(ov.incidents_current):'—','Precinct '+precinct)+
           k('vs '+years.previous+' YTD',ov?fmtPct(ov.pct_change_vs_previous):'—',ov?ov.trend_class:'')+
-          k('Recent 28D',fmtN(curr),rpct===null?'No prior baseline':fmtPct(rpct)+' vs prior 28D')+
+          k('Recent 14D',fmtN(curr),rpct===null?'No prior baseline':fmtPct(rpct)+' vs prior 14D')+
           k('Priority concerns',fmtN(actionable),'High / emerging / watch');
       }}
       function applyViewEmphasis() {{
@@ -640,7 +679,7 @@ def add_top_selector_panel(
         var rows=priorityRowsFor(precinct,crime);
         rows.sort(function(a,b) {{ return Number(b.priority_score||0)-Number(a.priority_score||0); }});
         var actionable=rows.filter(function(r) {{ return r.priority_signal==='High Priority'||r.priority_signal==='Emerging Concern'||r.priority_signal==='Watch'; }});
-        var improvements=rows.filter(function(r) {{ return r.priority_signal==='Recent Improvement'; }}).sort(function(a,b) {{ return Number(a.pct_change_28d||0)-Number(b.pct_change_28d||0); }});
+        var improvements=rows.filter(function(r) {{ return r.priority_signal==='Recent Improvement'; }}).sort(function(a,b) {{ return Number(a.pct_change_14d||0)-Number(b.pct_change_14d||0); }});
         var title='<b>Priority / Emerging Concerns'+(precinct?' — Precinct '+precinct:'')+(crime?' — '+crime:'')+'</b>';
         if(actionable.length) {{
           card.innerHTML=title+'<div style="margin-top:3px;color:#64748b;">Ranked by recent volume + absolute increase + percentage increase + citywide divergence + YTD direction.</div>'+priorityTableHtml(actionable,8)+(improvements.length?'<div style="margin-top:8px;"><b>Recent improvements worth noting</b></div>'+priorityTableHtml(improvements,4):'');
@@ -660,11 +699,11 @@ def add_top_selector_panel(
       function timingSummary(period,precinct,scope) {{
         var p=precinct||'ALL';
         var rows=temporalSummaryData.filter(function(r){{return r.period===period && r.precinct_norm===p && r.selection_type===scope.type && r.selection_name===scope.name;}});
-        return rows.length?rows[0]:null;
+        rows=rows.filter(scopedRecord); return rows.length?rows[0]:null;
       }}
       function timingMatrix(period,precinct,scope) {{
         var p=precinct||'ALL';
-        return temporalMatrixData.filter(function(r){{return r.period===period && r.precinct_norm===p && r.selection_type===scope.type && r.selection_name===scope.name;}});
+        return temporalMatrixData.filter(function(r){{return scopedRecord(r) && r.period===period && r.precinct_norm===p && r.selection_type===scope.type && r.selection_name===scope.name;}});
       }}
       function hourLabel(v) {{ if(v===null||v===undefined||Number.isNaN(Number(v))) return '—'; var h=Number(v); return String(h).padStart(2,'0')+':00'; }}
       function timingKpisHtml(r) {{
@@ -689,14 +728,14 @@ def add_top_selector_panel(
       function renderTimingCard() {{
         var precinct=(document.getElementById('cpPrecinctSelect')||{{value:''}}).value;
         var scope=temporalScope(); var card=document.getElementById('cpTimingCard'); if(!card) return;
-        var ytd=timingSummary('YTD',precinct,scope), recent=timingSummary('Recent 28D',precinct,scope);
-        var matrix=timingMatrix('Recent 28D',precinct,scope);
+        var ytd=timingSummary('YTD',precinct,scope), recent=timingSummary('Recent 14D',precinct,scope);
+        var matrix=timingMatrix('Recent 14D',precinct,scope);
         var label=(precinct?'Precinct '+precinct:'Citywide')+' — '+(scope.type==='All'?'All incidents':scope.name);
         var recentRange=recent?(' | '+recent.period_start+' to '+recent.period_end):'';
         var story='';
         if(recent) story='<div style="margin-top:6px;color:#0f172a;"><b>Recent timing signal:</b> '+recent.peak_day+' is the highest-volume day, '+recent.peak_time_block+' is the busiest time block, and the dominant shift is '+recent.peak_shift+'.</div>';
         card.innerHTML='<b>When is it happening? — '+label+'</b>'+
-          '<div style="margin-top:5px;color:#475569;"><b>Latest 28 days</b>'+recentRange+'</div>'+timingKpisHtml(recent)+story+
+          '<div style="margin-top:5px;color:#475569;"><b>Latest 14 days</b>'+recentRange+'</div>'+timingKpisHtml(recent)+story+
           '<div style="margin-top:8px;color:#475569;"><b>Recent day × time concentration</b> <span style="font-weight:400;">(highest cell highlighted)</span></div>'+timingGridHtml(matrix)+
           '<div style="margin-top:8px;color:#475569;"><b>YTD timing context</b>'+(ytd?(' | '+ytd.period_start+' to '+ytd.period_end):'')+'</div>'+timingKpisHtml(ytd);
       }}
@@ -711,7 +750,7 @@ def add_top_selector_panel(
       function hotspotRowsFor(precinct,scope) {{
         var p=precinct||'ALL';
         return hotspotChangeData.filter(function(r) {{
-          return r.precinct_norm===p && r.selection_type===scope.type && r.selection_name===scope.name;
+          return scopedRecord(r) && r.precinct_norm===p && r.selection_type===scope.type && r.selection_name===scope.name;
         }});
       }}
       // Emphasize the location selected from "Where is it changing?" so the
@@ -773,11 +812,11 @@ def add_top_selector_panel(
       function hotspotTableHtml(rows,limit) {{
         var use=rows.slice(0,limit||8);
         if(!use.length) return '<div style="color:#64748b;margin-top:4px;">No material hotspot change locations for this selection.</div>';
-        var h='<table><thead><tr><th>Status / Location</th><th>Prev 28D</th><th>Current 28D</th><th>Abs Δ</th><th>%chg</th><th>Map</th></tr></thead><tbody>';
+        var h='<table><thead><tr><th>Status / Location</th><th>Prev 14D</th><th>Current 14D</th><th>Abs Δ</th><th>%chg</th><th>Map</th></tr></thead><tbody>';
         use.forEach(function(r) {{
           var loc=(r.nearest_intersection && r.nearest_intersection!=='Unknown')?r.nearest_intersection:r.neighborhood;
           var label='<span class="'+hotspotStatusClass(r.hotspot_status)+'">'+r.hotspot_status+'</span><br><span style="color:#475569;">'+loc+'</span>';
-          h+='<tr><td>'+label+'</td><td>'+fmtN(r.previous_28d)+'</td><td>'+fmtN(r.current_28d)+'</td><td>'+fmtN(r.change_28d)+'</td><td>'+fmtPct(r.pct_change_28d)+'</td><td><button onclick="window.zoomHotspot('+r.latitude+','+r.longitude+')" style="padding:3px 6px;border:1px solid #c4b5fd;border-radius:5px;background:#fff;cursor:pointer;">Zoom</button></td></tr>';
+          h+='<tr><td>'+label+'</td><td>'+fmtN(r.previous_14d)+'</td><td>'+fmtN(r.current_14d)+'</td><td>'+fmtN(r.change_14d)+'</td><td>'+fmtPct(r.pct_change_14d)+'</td><td><button onclick="window.zoomHotspot('+r.latitude+','+r.longitude+')" style="padding:3px 6px;border:1px solid #c4b5fd;border-radius:5px;background:#fff;cursor:pointer;">Zoom</button></td></tr>';
         }});
         return h+'</tbody></table>';
       }}
@@ -789,16 +828,16 @@ def add_top_selector_panel(
         var statusOrder={{'New Hotspot':0,'Emerging Hotspot':1,'Persistent Hotspot':2,'Declining Hotspot':3}};
         rows.sort(function(a,b) {{ var sa=statusOrder[a.hotspot_status]??9, sb=statusOrder[b.hotspot_status]??9; return sa!==sb?sa-sb:Number(b.hotspot_score||0)-Number(a.hotspot_score||0); }});
         var newEmerging=rows.filter(function(r){{return r.hotspot_status==='New Hotspot'||r.hotspot_status==='Emerging Hotspot';}});
-        var persistent=rows.filter(function(r){{return r.hotspot_status==='Persistent Hotspot';}}).sort(function(a,b){{return Number(b.current_28d||0)-Number(a.current_28d||0);}});
-        var declining=rows.filter(function(r){{return r.hotspot_status==='Declining Hotspot';}}).sort(function(a,b){{return Number(a.change_28d||0)-Number(b.change_28d||0);}});
+        var persistent=rows.filter(function(r){{return r.hotspot_status==='Persistent Hotspot';}}).sort(function(a,b){{return Number(b.current_14d||0)-Number(a.current_14d||0);}});
+        var declining=rows.filter(function(r){{return r.hotspot_status==='Declining Hotspot';}}).sort(function(a,b){{return Number(a.change_14d||0)-Number(b.change_14d||0);}});
         var label=(precinct?'Precinct '+precinct:'Citywide')+' — '+(scope.type==='All'?'All incidents':scope.name);
-        var range=rows.length?(' | '+rows[0].current_28d_start+' to '+rows[0].current_28d_end+' vs '+rows[0].previous_28d_start+' to '+rows[0].previous_28d_end):'';
+        var range=rows.length?(' | '+rows[0].current_14d_start+' to '+rows[0].current_14d_end+' vs '+rows[0].previous_14d_start+' to '+rows[0].previous_14d_end):'';
         var summary='<div style="margin-top:4px;color:#475569;">'+newEmerging.length+' new/emerging, '+persistent.length+' persistent, '+declining.length+' declining hotspot cells'+range+'.</div>';
         var body='';
         if(newEmerging.length) body+='<div style="margin-top:7px;"><b>New / emerging locations needing attention</b></div>'+hotspotTableHtml(newEmerging,6);
         if(persistent.length) body+='<div style="margin-top:8px;"><b>Persistent concentrations</b></div>'+hotspotTableHtml(persistent,5);
         if(declining.length) body+='<div style="margin-top:8px;"><b>Declining hotspots</b></div>'+hotspotTableHtml(declining,5);
-        if(!body) body='<div style="margin-top:5px;color:#64748b;">No cells crossed the hotspot thresholds in either 28-day period for this selection.</div>';
+        if(!body) body='<div style="margin-top:5px;color:#64748b;">No cells crossed the hotspot thresholds in either 14-day period for this selection.</div>';
         card.innerHTML='<b>Where is it changing? — '+label+'</b>'+summary+body+'<div style="margin-top:5px;color:#64748b;font-size:11px;">Hotspots are relative to the selected precinct/crime scope: cells at or above the 80th percentile of occupied-cell counts, with a minimum of 3 incidents. Use Zoom to inspect the location on the map.</div>';
       }}
 
@@ -810,26 +849,26 @@ def add_top_selector_panel(
           var rows=rowsFor(precinct,crime,trend); var recent=rows28For(precinct,crime);
           card.innerHTML='<b>Precinct '+precinct+' — '+crime+'</b>'+
             '<div style="margin-top:5px;color:#475569;"><b>Matched YTD</b></div>'+tableHtml(rows,'offense_category','Crime Type',5)+
-            '<div style="margin-top:8px;color:#475569;"><b>Recent 28-day movement</b>'+recentWindowText(recent)+'</div>'+recentTableHtml(recent,'offense_category','Crime Type',5)+
+            '<div style="margin-top:8px;color:#475569;"><b>Recent 14-day movement</b>'+recentWindowText(recent)+'</div>'+recentTableHtml(recent,'offense_category','Crime Type',5)+
             interpretationHtml(rows,recent,precinct,crime);
           return;
         }}
         if(precinct) {{
-          var overall=overallData[precinct]; var allRows=rowsFor(precinct,'',trend); var recentRows=rows28For(precinct,'');
+          var overall=overallFor(precinct); var allRows=rowsFor(precinct,'',trend); var recentRows=rows28For(precinct,'');
           allRows.sort(function(a,b) {{ return Number(b.pct_change_vs_previous||0)-Number(a.pct_change_vs_previous||0); }});
           var topWorse=allRows.filter(function(r){{return (r.trend_class||'').includes('Worsening');}}).slice(0,5);
           var topBetter=allRows.filter(function(r){{return (r.trend_class||'').includes('Improving');}}).sort(function(a,b){{return Number(a.pct_change_vs_previous||0)-Number(b.pct_change_vs_previous||0);}}).slice(0,5);
-          var recentUp=recentRows.filter(function(r){{return r.recent_movement==='Increasing';}}).sort(function(a,b){{return Number(b.pct_change_28d||0)-Number(a.pct_change_28d||0);}}).slice(0,5);
-          var recentDown=recentRows.filter(function(r){{return r.recent_movement==='Decreasing';}}).sort(function(a,b){{return Number(a.pct_change_28d||0)-Number(b.pct_change_28d||0);}}).slice(0,5);
+          var recentUp=recentRows.filter(function(r){{return r.recent_movement==='Increasing';}}).sort(function(a,b){{return Number(b.pct_change_14d||0)-Number(a.pct_change_14d||0);}}).slice(0,5);
+          var recentDown=recentRows.filter(function(r){{return r.recent_movement==='Decreasing';}}).sort(function(a,b){{return Number(a.pct_change_14d||0)-Number(b.pct_change_14d||0);}}).slice(0,5);
           var head='<b>Precinct '+precinct+'</b>';
           if(overall) head+=' — <span class="'+trendClassName(overall.trend_class)+'">Overall '+overall.trend_class+'</span> | '+years.current+' YTD '+fmtN(overall.incidents_current)+' | '+fmtPct(overall.pct_change_vs_previous)+' vs '+years.previous+' | Data through '+overall.comparison_date;
           if(trend) {{
             card.innerHTML=head+'<div style="margin-top:6px;"><b>Crime types matching '+trend+' (YTD):</b></div>'+tableHtml(allRows,'offense_category','Crime Type',15)+
-              '<div style="margin-top:8px;"><b>Recent 28-day movement for this precinct</b>'+recentWindowText(recentRows)+'</div>'+recentTableHtml(recentRows,'offense_category','Crime Type',10);
+              '<div style="margin-top:8px;"><b>Recent 14-day movement for this precinct</b>'+recentWindowText(recentRows)+'</div>'+recentTableHtml(recentRows,'offense_category','Crime Type',10);
           }} else {{
             card.innerHTML=head+
               '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px;"><div><b>Largest YTD worsening drivers</b>'+tableHtml(topWorse,'offense_category','Crime Type',5)+'</div><div><b>Largest YTD improving drivers</b>'+tableHtml(topBetter,'offense_category','Crime Type',5)+'</div></div>'+
-              '<div style="margin-top:8px;color:#475569;"><b>Recent 28-day movement</b>'+recentWindowText(recentRows)+'</div>'+
+              '<div style="margin-top:8px;color:#475569;"><b>Recent 14-day movement</b>'+recentWindowText(recentRows)+'</div>'+
               '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px;"><div><b>Largest recent increases</b>'+recentTableHtml(recentUp,'offense_category','Crime Type',5)+'</div><div><b>Largest recent decreases</b>'+recentTableHtml(recentDown,'offense_category','Crime Type',5)+'</div></div>';
           }}
           return;
@@ -837,35 +876,40 @@ def add_top_selector_panel(
         if(crime) {{
           var rows=rowsFor('',crime,trend); var recent=rows28For('',crime);
           rows.sort(function(a,b) {{ return Number(b.pct_change_vs_previous||0)-Number(a.pct_change_vs_previous||0); }});
-          recent.sort(function(a,b) {{ return Number(b.pct_change_28d||0)-Number(a.pct_change_28d||0); }});
+          recent.sort(function(a,b) {{ return Number(b.pct_change_14d||0)-Number(a.pct_change_14d||0); }});
           card.innerHTML='<b>'+crime+' across precincts'+(trend?' — '+trend:'')+'</b>'+
             '<div style="margin-top:5px;color:#475569;"><b>Matched YTD</b></div>'+tableHtml(rows,'precinct_norm','Precinct',20)+
-            '<div style="margin-top:8px;color:#475569;"><b>Recent 28-day movement</b>'+recentWindowText(recent)+'</div>'+recentTableHtml(recent,'precinct_norm','Precinct',20);
+            '<div style="margin-top:8px;color:#475569;"><b>Recent 14-day movement</b>'+recentWindowText(recent)+'</div>'+recentTableHtml(recent,'precinct_norm','Precinct',20);
           return;
         }}
         if(trend) {{ var rows=rowsFor('','',trend); rows.sort(function(a,b) {{ return Math.abs(Number(b.pct_change_vs_previous||0))-Math.abs(Number(a.pct_change_vs_previous||0)); }}); card.innerHTML='<b>All crime types — '+trend+'</b><div style="color:#64748b;margin-top:3px;">Select a precinct or crime type to narrow these results.</div>'+tableHtml(rows,'offense_category','Crime Type',15); return; }}
-        card.innerHTML='Select a precinct and/or crime type to see matched year-to-date trend details and recent 28-day movement.';
+        card.innerHTML='Select a precinct and/or crime type to see matched year-to-date trend details and recent 14-day movement.';
       }}
       function setStatus(parts) {{ var s=document.getElementById('cpSelectorStatus'); if(s) s.textContent='Active filters: '+parts.join(' | '); }}
       function zoomToPrecinct(precinct) {{
         var mp=window[mapObjectName]; if(!mp) return;
-        var b=precinctBounds[precinct||'ALL'];
+        var neighborhood=selectedNeighborhood();
+        var b=neighborhoodBounds[neighborhood]||precinctBounds[precinct||'ALL'];
         if(b && b.length===2) mp.fitBounds(b, {{padding:[24,24], maxZoom:13}});
       }}
       window.applyTopSelectors=function() {{
         var core=(document.getElementById('cpCoreSelect')||{{value:''}}).value, action=(document.getElementById('cpActionSelect')||{{value:''}}).value,
             decision=(document.getElementById('cpDecisionSelect')||{{value:''}}).value, precinct=(document.getElementById('cpPrecinctSelect')||{{value:''}}).value,
+            neighborhood=selectedNeighborhood(),
             category=(document.getElementById('cpCategorySelect')||{{value:''}}).value, view=currentView();
         // The operational map is a real street basemap with a scoped heatmap.
         // H3 remains available as an analytical overlay, not the default visual.
-        var scoped = Boolean(precinct || category);
+        var scoped = Boolean(precinct || neighborhood || category);
         setExclusiveByPrefix('Core | ', scoped && core==='Core | Incident Density Heatmap' ? '' : core);
         setExclusiveByPrefix('Action | ',action); setExclusiveByPrefix('Decision | ',decision);
         setExclusiveByPrefix('Precinct | ','');
         setExclusiveByPrefix('Category Focus | ','');
         setExclusiveByPrefix('Crime Type | ','');
         setExclusiveByPrefix('Scope | Precinct | ','');
-        if(precinct && category) {{
+                setExclusiveByPrefix('Scope | Neighborhood | ','');
+                if(neighborhood) {{
+                    setExclusiveByPrefix('Scope | Neighborhood | ','Scope | Neighborhood | '+neighborhood+' | Precinct | '+(precinct||'ALL')+' | '+(category||'All Crime'));
+                }} else if(precinct && category) {{
           setExclusiveByPrefix('Scope | Precinct | ','Scope | Precinct | '+precinct+' | '+category);
         }} else if(precinct) {{
           setExclusiveByPrefix('Precinct | ','Precinct | '+precinct);
@@ -877,7 +921,7 @@ def add_top_selector_panel(
         setExclusiveByPrefix('Core Type | H3 Count | ', core.startsWith('Core Type | H3 Count | ')?core:'');
         zoomToPrecinct(precinct);
         var crimeLabel=category?category.replace('Category Focus | ','').replace('Crime Type | ',''):'All Crime';
-        setStatus([(precinct?'Precinct '+precinct:'Detroit Overview'),crimeLabel,(view==='Recent'?'Recent 28-Day Emphasis':view==='YTD'?'Matched YTD Emphasis':'Operational Summary')]);
+        setStatus([(precinct?'Precinct '+precinct:'Detroit Overview'),(neighborhood||'All Neighborhoods'),crimeLabel,(view==='Recent'?'Recent 14-Day Emphasis':view==='YTD'?'Matched YTD Emphasis':'Operational Summary')]);
         renderKpis();
         renderExecutiveSummary();
         renderPriorityCard();
@@ -887,8 +931,8 @@ def add_top_selector_panel(
         applyViewEmphasis();
       }};
       window.backToDetroit=function() {{ var p=document.getElementById('cpPrecinctSelect'); if(p)p.value=''; window.applyTopSelectors(); }};
-      window.clearTopSelectors=function() {{ ['cpActionSelect','cpDecisionSelect','cpPrecinctSelect','cpCategorySelect'].forEach(function(id){{var e=document.getElementById(id);if(e)e.value='';}}); var pe=document.getElementById('cpPeriodSelect'); if(pe)pe.value='Operational'; var ce=document.getElementById('cpCoreSelect'); if(ce) ce.value='Core | Incident Density Heatmap'; setExclusiveByPrefix('Core | ','');setExclusiveByPrefix('Action | ','');setExclusiveByPrefix('Decision | ','');setExclusiveByPrefix('Precinct | ','');setExclusiveByPrefix('Category Focus | ','');setExclusiveByPrefix('Crime Type | ','');setExclusiveByPrefix('Scope | Precinct | ','');setExclusiveByPrefix('Core Type | H3 Count | ',''); window.applyTopSelectors(); }};
-      ['cpCoreSelect','cpActionSelect','cpDecisionSelect','cpPrecinctSelect','cpCategorySelect','cpPeriodSelect'].forEach(function(id){{var e=document.getElementById(id);if(e)e.addEventListener('change',window.applyTopSelectors);}});
+    window.clearTopSelectors=function() {{ ['cpActionSelect','cpDecisionSelect','cpPrecinctSelect','cpNeighborhoodSelect','cpCategorySelect'].forEach(function(id){{var e=document.getElementById(id);if(e)e.value='';}}); var pe=document.getElementById('cpPeriodSelect'); if(pe)pe.value='Operational'; var ce=document.getElementById('cpCoreSelect'); if(ce) ce.value='Core | Incident Density Heatmap'; setExclusiveByPrefix('Core | ','');setExclusiveByPrefix('Action | ','');setExclusiveByPrefix('Decision | ','');setExclusiveByPrefix('Precinct | ','');setExclusiveByPrefix('Category Focus | ','');setExclusiveByPrefix('Crime Type | ','');setExclusiveByPrefix('Scope | Precinct | ','');setExclusiveByPrefix('Scope | Neighborhood | ','');setExclusiveByPrefix('Core Type | H3 Count | ',''); window.applyTopSelectors(); }};
+    ['cpCoreSelect','cpActionSelect','cpDecisionSelect','cpPrecinctSelect','cpNeighborhoodSelect','cpCategorySelect','cpPeriodSelect'].forEach(function(id){{var e=document.getElementById(id);if(e)e.addEventListener('change',window.applyTopSelectors);}});
 
       window.focusAnalysisSection=function(section) {{
         var panel=document.getElementById('cpPanel');
@@ -919,11 +963,14 @@ def add_top_selector_panel(
         try {{
           var params=new URLSearchParams(window.location.search);
           var precinct=params.get('precinct')||'';
+          var neighborhood=params.get('neighborhood')||'';
           var crime=params.get('crime')||'';
           var view=params.get('view')||'';
           var section=params.get('section')||'';
           var psel=document.getElementById('cpPrecinctSelect');
           if(psel && precinct && Array.from(psel.options).some(function(o){{return o.value===precinct;}})) psel.value=precinct;
+          var nsel=document.getElementById('cpNeighborhoodSelect');
+          if(nsel && neighborhood && Array.from(nsel.options).some(function(o){{return o.value===neighborhood;}})) nsel.value=neighborhood;
           var csel=document.getElementById('cpCategorySelect');
           if(csel && crime) {{
             var candidates=['Crime Type | '+crime,'Category Focus | '+crime];
@@ -1510,15 +1557,15 @@ def build_precinct_improvement_table(
 
     return counts.sort_values(["improvement_score", "incidents_current"], ascending=[False, False]).reset_index(drop=True)
 
-def build_precinct_crime_28d_comparison(
+def build_precinct_crime_14d_comparison(
     df: pd.DataFrame,
     current_year: int,
 ) -> pd.DataFrame:
     """
-    Compare the latest 28 days with the immediately preceding 28 days
+    Compare the latest 14 days with the immediately preceding 14 days
     for every precinct and every offense category.
 
-    Also calculates the same 28-day change citywide for each crime type.
+    Also calculates the same 14-day change citywide for each crime type.
     """
 
     temp = df.copy()
@@ -1533,12 +1580,12 @@ def build_precinct_crime_28d_comparison(
     if pd.isna(current_max):
         return pd.DataFrame()
 
-    # Current 28-day window: cutoff date plus previous 27 days.
-    current_start = current_max - pd.Timedelta(days=27)
+    # Current 14-day window: cutoff date plus previous 13 days.
+    current_start = current_max - pd.Timedelta(days=RECENT_WINDOW_DAYS - 1)
 
-    # Previous 28-day window immediately before the current one.
+    # Previous 14-day window immediately before the current one.
     previous_end = current_start - pd.Timedelta(days=1)
-    previous_start = previous_end - pd.Timedelta(days=27)
+    previous_start = previous_end - pd.Timedelta(days=RECENT_WINDOW_DAYS - 1)
 
     current_period = temp[
         (temp["incident_date"] >= current_start)
@@ -1558,7 +1605,7 @@ def build_precinct_crime_28d_comparison(
             ["precinct_norm", "offense_category"]
         )
         .size()
-        .rename("current_28d")
+        .rename("current_14d")
         .reset_index()
     )
 
@@ -1567,7 +1614,7 @@ def build_precinct_crime_28d_comparison(
             ["precinct_norm", "offense_category"]
         )
         .size()
-        .rename("previous_28d")
+        .rename("previous_14d")
         .reset_index()
     )
 
@@ -1577,25 +1624,25 @@ def build_precinct_crime_28d_comparison(
         how="outer",
     ).fillna(0)
 
-    comparison["previous_28d"] = comparison["previous_28d"].astype(int)
-    comparison["current_28d"] = comparison["current_28d"].astype(int)
+    comparison["previous_14d"] = comparison["previous_14d"].astype(int)
+    comparison["current_14d"] = comparison["current_14d"].astype(int)
 
-    comparison["change_28d"] = (
-        comparison["current_28d"] - comparison["previous_28d"]
+    comparison["change_14d"] = (
+        comparison["current_14d"] - comparison["previous_14d"]
     )
 
-    comparison["pct_change_28d"] = np.where(
-        comparison["previous_28d"] > 0,
+    comparison["pct_change_14d"] = np.where(
+        comparison["previous_14d"] > 0,
         100
-        * comparison["change_28d"]
-        / comparison["previous_28d"],
+        * comparison["change_14d"]
+        / comparison["previous_14d"],
         np.nan,
     )
 
     comparison["recent_movement"] = np.select(
         [
-            comparison["change_28d"] > 0,
-            comparison["change_28d"] < 0,
+            comparison["change_14d"] > 0,
+            comparison["change_14d"] < 0,
         ],
         [
             "Increasing",
@@ -1607,14 +1654,14 @@ def build_precinct_crime_28d_comparison(
     city_current = (
         current_period.groupby("offense_category")
         .size()
-        .rename("city_current_28d")
+        .rename("city_current_14d")
         .reset_index()
     )
 
     city_previous = (
         previous_period.groupby("offense_category")
         .size()
-        .rename("city_previous_28d")
+        .rename("city_previous_14d")
         .reset_index()
     )
 
@@ -1624,18 +1671,18 @@ def build_precinct_crime_28d_comparison(
         how="outer",
     ).fillna(0)
 
-    city["city_previous_28d"] = city["city_previous_28d"].astype(int)
-    city["city_current_28d"] = city["city_current_28d"].astype(int)
+    city["city_previous_14d"] = city["city_previous_14d"].astype(int)
+    city["city_current_14d"] = city["city_current_14d"].astype(int)
 
-    city["city_change_28d"] = (
-        city["city_current_28d"] - city["city_previous_28d"]
+    city["city_change_14d"] = (
+        city["city_current_14d"] - city["city_previous_14d"]
     )
 
-    city["city_pct_change_28d"] = np.where(
-        city["city_previous_28d"] > 0,
+    city["city_pct_change_14d"] = np.where(
+        city["city_previous_14d"] > 0,
         100
-        * city["city_change_28d"]
-        / city["city_previous_28d"],
+        * city["city_change_14d"]
+        / city["city_previous_14d"],
         np.nan,
     )
 
@@ -1646,18 +1693,18 @@ def build_precinct_crime_28d_comparison(
     )
 
     # Store the exact periods for dashboard/report display.
-    comparison["previous_28d_start"] = previous_start.strftime("%Y-%m-%d")
-    comparison["previous_28d_end"] = previous_end.strftime("%Y-%m-%d")
-    comparison["current_28d_start"] = current_start.strftime("%Y-%m-%d")
-    comparison["current_28d_end"] = current_max.strftime("%Y-%m-%d")
+    comparison["previous_14d_start"] = previous_start.strftime("%Y-%m-%d")
+    comparison["previous_14d_end"] = previous_end.strftime("%Y-%m-%d")
+    comparison["current_14d_start"] = current_start.strftime("%Y-%m-%d")
+    comparison["current_14d_end"] = current_max.strftime("%Y-%m-%d")
 
-    comparison["pct_change_28d"] = comparison["pct_change_28d"].round(2)
-    comparison["city_pct_change_28d"] = comparison[
-        "city_pct_change_28d"
+    comparison["pct_change_14d"] = comparison["pct_change_14d"].round(2)
+    comparison["city_pct_change_14d"] = comparison[
+        "city_pct_change_14d"
     ].round(2)
 
     return comparison.sort_values(
-        ["precinct_norm", "current_28d"],
+        ["precinct_norm", "current_14d"],
         ascending=[True, False],
     ).reset_index(drop=True)
 
@@ -1666,7 +1713,7 @@ def build_temporal_pattern_profiles(
     df: pd.DataFrame,
     current_year: int,
 ) -> dict[str, pd.DataFrame]:
-    """Build YTD and recent-28-day timing profiles for dashboard selections.
+    """Build YTD and recent-14-day timing profiles for dashboard selections.
 
     Profiles are available citywide and by precinct for: all incidents, every
     offense category, and the three existing Category Focus groups.
@@ -1680,7 +1727,7 @@ def build_temporal_pattern_profiles(
 
     current_max = temp["incident_date"].max()
     ytd_start = pd.Timestamp(year=int(current_year), month=1, day=1)
-    recent_start = current_max - pd.Timedelta(days=27)
+    recent_start = current_max - pd.Timedelta(days=RECENT_WINDOW_DAYS - 1)
 
     temp["incident_hour_of_day"] = temp["incident_hour_of_day"].astype(int)
     temp["weekday"] = temp["incident_date"].dt.day_name()
@@ -1693,7 +1740,7 @@ def build_temporal_pattern_profiles(
 
     periods = [
         ("YTD", temp[(temp["incident_date"] >= ytd_start) & (temp["incident_date"] <= current_max)].copy(), ytd_start, current_max),
-        ("Recent 28D", temp[(temp["incident_date"] >= recent_start) & (temp["incident_date"] <= current_max)].copy(), recent_start, current_max),
+        ("Recent 14D", temp[(temp["incident_date"] >= recent_start) & (temp["incident_date"] <= current_max)].copy(), recent_start, current_max),
     ]
 
     focus_specs = [
@@ -1768,22 +1815,22 @@ def build_temporal_pattern_profiles(
 
 def build_priority_emerging_concerns(
     precinct_crime_trends: pd.DataFrame,
-    precinct_crime_28d: pd.DataFrame,
+    precinct_crime_14d: pd.DataFrame,
 ) -> pd.DataFrame:
     """Rank precinct × crime-type signals for operational attention.
 
     The score is intentionally volume-aware so a tiny baseline cannot dominate
     simply because its percentage change is very large. It combines:
-    - current 28-day volume,
-    - absolute 28-day increase,
-    - 28-day percentage change,
-    - divergence from the citywide 28-day trend, and
+    - current 14-day volume,
+    - absolute 14-day increase,
+    - 14-day percentage change,
+    - divergence from the citywide 14-day trend, and
     - matched-YTD direction versus the previous year.
     """
-    if precinct_crime_28d is None or precinct_crime_28d.empty:
+    if precinct_crime_14d is None or precinct_crime_14d.empty:
         return pd.DataFrame()
 
-    recent = precinct_crime_28d.copy()
+    recent = precinct_crime_14d.copy()
     trend = precinct_crime_trends.copy() if precinct_crime_trends is not None else pd.DataFrame()
 
     def norm_precinct(value):
@@ -1801,49 +1848,49 @@ def build_priority_emerging_concerns(
         recent["pct_change_vs_previous"] = np.nan
         recent["trend_class"] = "Unknown"
 
-    recent["change_28d"] = recent["current_28d"] - recent["previous_28d"]
-    recent["city_gap_28d"] = recent["pct_change_28d"] - recent["city_pct_change_28d"]
+    recent["change_14d"] = recent["current_14d"] - recent["previous_14d"]
+    recent["city_gap_14d"] = recent["pct_change_14d"] - recent["city_pct_change_14d"]
 
-    max_volume = max(float(recent["current_28d"].max()), 1.0)
-    max_abs_increase = max(float(recent["change_28d"].clip(lower=0).max()), 1.0)
+    max_volume = max(float(recent["current_14d"].max()), 1.0)
+    max_abs_increase = max(float(recent["change_14d"].clip(lower=0).max()), 1.0)
 
-    volume_component = 25 * np.log1p(recent["current_28d"].clip(lower=0)) / np.log1p(max_volume)
-    absolute_component = 30 * recent["change_28d"].clip(lower=0) / max_abs_increase
+    volume_component = 25 * np.log1p(recent["current_14d"].clip(lower=0)) / np.log1p(max_volume)
+    absolute_component = 30 * recent["change_14d"].clip(lower=0) / max_abs_increase
 
-    # When the prior-period baseline is zero, pct_change_28d is undefined.
+    # When the prior-period baseline is zero, pct_change_14d is undefined.
     # Use a capped volume-based proxy so new clusters can still surface without
     # assigning an infinite percentage increase.
-    pct_signal = recent["pct_change_28d"].copy()
-    zero_baseline_proxy = (recent["current_28d"].clip(lower=0) * 10).clip(upper=100)
+    pct_signal = recent["pct_change_14d"].copy()
+    zero_baseline_proxy = (recent["current_14d"].clip(lower=0) * 10).clip(upper=100)
     pct_signal = pct_signal.where(pct_signal.notna(), zero_baseline_proxy)
     percent_component = 20 * pct_signal.clip(lower=0, upper=100) / 100
 
-    city_component = 15 * recent["city_gap_28d"].fillna(0).clip(lower=0, upper=50) / 50
+    city_component = 15 * recent["city_gap_14d"].fillna(0).clip(lower=0, upper=50) / 50
     ytd_component = 10 * recent["pct_change_vs_previous"].fillna(0).clip(lower=0, upper=50) / 50
 
     recent["priority_score"] = (
         volume_component + absolute_component + percent_component + city_component + ytd_component
     ).round(1)
 
-    recent_pct = recent["pct_change_28d"]
-    abs_change = recent["change_28d"]
-    volume = recent["current_28d"]
-    city_gap = recent["city_gap_28d"].fillna(0)
+    recent_pct = recent["pct_change_14d"]
+    abs_change = recent["change_14d"]
+    volume = recent["current_14d"]
+    city_gap = recent["city_gap_14d"].fillna(0)
     ytd_pct = recent["pct_change_vs_previous"].fillna(0)
 
     high = (
         (volume >= 20)
         & (abs_change >= 10)
-        & ((recent_pct >= 25) | (recent["previous_28d"] == 0))
+        & ((recent_pct >= 25) | (recent["previous_14d"] == 0))
         & ((city_gap >= 10) | (ytd_pct > 2))
     )
     emerging = (
         (volume >= 10)
         & (abs_change >= 5)
-        & ((recent_pct >= 10) | (recent["previous_28d"] == 0))
+        & ((recent_pct >= 10) | (recent["previous_14d"] == 0))
         & ((city_gap >= 5) | (ytd_pct > 2))
     )
-    watch = (volume >= 5) & (abs_change > 0) & ((recent_pct > 2) | (recent["previous_28d"] == 0))
+    watch = (volume >= 5) & (abs_change > 0) & ((recent_pct > 2) | (recent["previous_14d"] == 0))
     improving = (volume >= 5) & (abs_change <= -5) & (recent_pct <= -10)
 
     recent["priority_signal"] = np.select(
@@ -1855,7 +1902,7 @@ def build_priority_emerging_concerns(
     signal_order = {"High Priority": 0, "Emerging Concern": 1, "Watch": 2, "Recent Improvement": 3, "Monitor": 4}
     recent["signal_order"] = recent["priority_signal"].map(signal_order).fillna(9)
     return recent.sort_values(
-        ["signal_order", "priority_score", "current_28d"],
+        ["signal_order", "priority_score", "current_14d"],
         ascending=[True, False, False],
     ).drop(columns=["signal_order"]).reset_index(drop=True)
 
@@ -2005,10 +2052,10 @@ def build_target_area_ytd_comparison(
     return out.sort_values("incidents_current", ascending=False).reset_index(drop=True)
 
 
-def build_violent_28d_summaries(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def build_violent_14d_summaries(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     violent_categories = {"ASSAULT", "AGGRAVATED ASSAULT", "ROBBERY", "HOMICIDE", "WEAPONS OFFENSES"}
     max_date = pd.to_datetime(df["incident_date"]).max()
-    start_date = max_date - pd.Timedelta(days=27)
+    start_date = max_date - pd.Timedelta(days=RECENT_WINDOW_DAYS - 1)
 
     temp = df.copy()
     temp["incident_date"] = pd.to_datetime(temp["incident_date"])
@@ -2039,11 +2086,11 @@ def build_violent_28d_summaries(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Data
     return by_type, by_day_hour
 
 
-def save_violent_28d_charts(by_type: pd.DataFrame, by_day_hour: pd.DataFrame, by_type_out: Path, by_day_hour_out: Path) -> None:
+def save_violent_14d_charts(by_type: pd.DataFrame, by_day_hour: pd.DataFrame, by_type_out: Path, by_day_hour_out: Path) -> None:
     if not by_type.empty:
         plt.figure(figsize=(10, 5))
         sns.barplot(data=by_type, y="offense_category", x="incident_count", color="#b91c1c")
-        plt.title("Violent Crime (Past 28 Days) by Type")
+        plt.title("Violent Crime (Past 14 Days) by Type")
         plt.xlabel("Incidents")
         plt.ylabel("Offense Category")
         plt.tight_layout()
@@ -2054,7 +2101,7 @@ def save_violent_28d_charts(by_type: pd.DataFrame, by_day_hour: pd.DataFrame, by
         pivot = by_day_hour.pivot(index="day_name", columns="hour", values="incident_count").fillna(0)
         plt.figure(figsize=(13, 5))
         sns.heatmap(pivot, cmap="Reds", linewidths=0.3, linecolor="#e5e7eb")
-        plt.title("Violent Crime (Past 28 Days) by Day and Hour")
+        plt.title("Violent Crime (Past 14 Days) by Day and Hour")
         plt.xlabel("Hour of Day")
         plt.ylabel("Day of Week")
         plt.tight_layout()
@@ -2071,8 +2118,8 @@ def build_hotspot_persistence_change(
 ) -> pd.DataFrame:
     """Classify H3 locations as persistent, emerging, new, or declining hotspots.
 
-    The comparison uses the latest 28 days in the current-year data versus the
-    immediately preceding 28 days. Hotspot thresholds are calculated separately
+    The comparison uses the latest 14 days in the current-year data versus the
+    immediately preceding 14 days. Hotspot thresholds are calculated separately
     for each precinct/selection scope using the 80th percentile of occupied H3
     cells, with a small minimum-count guardrail so one-off incidents are not
     automatically treated as hotspots.
@@ -2087,9 +2134,9 @@ def build_hotspot_persistence_change(
     if pd.isna(current_max):
         return pd.DataFrame()
 
-    current_start = current_max - pd.Timedelta(days=27)
+    current_start = current_max - pd.Timedelta(days=RECENT_WINDOW_DAYS - 1)
     previous_end = current_start - pd.Timedelta(days=1)
-    previous_start = previous_end - pd.Timedelta(days=27)
+    previous_start = previous_end - pd.Timedelta(days=RECENT_WINDOW_DAYS - 1)
 
     recent = temp[
         (temp["incident_year"] == current_year)
@@ -2104,7 +2151,7 @@ def build_hotspot_persistence_change(
         axis=1,
     )
     recent["hotspot_period"] = np.where(
-        recent["incident_date"] >= current_start, "Current 28D", "Previous 28D"
+        recent["incident_date"] >= current_start, "Current 14D", "Previous 14D"
     )
 
     def mode_or_first(series: pd.Series):
@@ -2149,21 +2196,21 @@ def build_hotspot_persistence_change(
             scope_df.groupby(["h3_cell", "hotspot_period"])
             .size()
             .unstack(fill_value=0)
-            .reindex(columns=["Previous 28D", "Current 28D"], fill_value=0)
+            .reindex(columns=["Previous 14D", "Current 14D"], fill_value=0)
             .reset_index()
-            .rename(columns={"Previous 28D": "previous_28d", "Current 28D": "current_28d"})
+            .rename(columns={"Previous 14D": "previous_14d", "Current 14D": "current_14d"})
         )
         if counts.empty:
             return
-        prev_threshold = threshold_from(counts["previous_28d"])
-        curr_threshold = threshold_from(counts["current_28d"])
-        prev_hot = counts["previous_28d"] >= prev_threshold
-        curr_hot = counts["current_28d"] >= curr_threshold
+        prev_threshold = threshold_from(counts["previous_14d"])
+        curr_threshold = threshold_from(counts["current_14d"])
+        prev_hot = counts["previous_14d"] >= prev_threshold
+        curr_hot = counts["current_14d"] >= curr_threshold
 
         counts["hotspot_status"] = np.select(
             [
                 prev_hot & curr_hot,
-                (~prev_hot) & curr_hot & counts["previous_28d"].eq(0),
+                (~prev_hot) & curr_hot & counts["previous_14d"].eq(0),
                 (~prev_hot) & curr_hot,
                 prev_hot & (~curr_hot),
             ],
@@ -2174,26 +2221,26 @@ def build_hotspot_persistence_change(
         if counts.empty:
             return
 
-        counts["change_28d"] = counts["current_28d"] - counts["previous_28d"]
-        counts["pct_change_28d"] = np.where(
-            counts["previous_28d"] > 0,
-            100 * counts["change_28d"] / counts["previous_28d"],
+        counts["change_14d"] = counts["current_14d"] - counts["previous_14d"]
+        counts["pct_change_14d"] = np.where(
+            counts["previous_14d"] > 0,
+            100 * counts["change_14d"] / counts["previous_14d"],
             np.nan,
         )
         counts["hotspot_score"] = (
-            counts["current_28d"]
-            + 1.5 * counts["change_28d"].clip(lower=0)
-            + np.where(counts["hotspot_status"].eq("Persistent Hotspot"), counts["current_28d"] * 0.35, 0)
+            counts["current_14d"]
+            + 1.5 * counts["change_14d"].clip(lower=0)
+            + np.where(counts["hotspot_status"].eq("Persistent Hotspot"), counts["current_14d"] * 0.35, 0)
         ).round(2)
         counts["precinct_norm"] = precinct_key
         counts["selection_type"] = selection_type
         counts["selection_name"] = selection_name
         counts["previous_hotspot_threshold"] = prev_threshold
         counts["current_hotspot_threshold"] = curr_threshold
-        counts["previous_28d_start"] = previous_start.strftime("%Y-%m-%d")
-        counts["previous_28d_end"] = previous_end.strftime("%Y-%m-%d")
-        counts["current_28d_start"] = current_start.strftime("%Y-%m-%d")
-        counts["current_28d_end"] = current_max.strftime("%Y-%m-%d")
+        counts["previous_14d_start"] = previous_start.strftime("%Y-%m-%d")
+        counts["previous_14d_end"] = previous_end.strftime("%Y-%m-%d")
+        counts["current_14d_start"] = current_start.strftime("%Y-%m-%d")
+        counts["current_14d_end"] = current_max.strftime("%Y-%m-%d")
         outputs.append(counts)
 
     precinct_values = sorted(recent["precinct_norm"].dropna().astype(str).unique().tolist())
@@ -2215,7 +2262,7 @@ def build_hotspot_persistence_change(
 
     out = pd.concat(outputs, ignore_index=True)
     out = out.merge(location_lookup, on="h3_cell", how="left")
-    out["pct_change_28d"] = out["pct_change_28d"].round(2)
+    out["pct_change_14d"] = out["pct_change_14d"].round(2)
     status_rank = {
         "New Hotspot": 0,
         "Emerging Hotspot": 1,
@@ -2583,6 +2630,7 @@ def save_interactive_h3_choropleth(df: pd.DataFrame, out_path: Path, resolution:
     add_top_selector_panel(
         m,
         sorted(df["precinct_norm"].dropna().astype(str).unique().tolist()),
+        sorted(df["neighborhood"].dropna().astype(str).unique().tolist()),
         sorted(df["offense_category"].dropna().astype(str).unique().tolist()),
         precinct_improvement=precinct_improvement,
         current_year=current_year,
@@ -2796,7 +2844,7 @@ def save_combined_interactive_dashboard(
     top_n_categories: int | None = None,
     precinct_improvement: pd.DataFrame | None = None,
     precinct_crime_trends: pd.DataFrame | None = None,
-    precinct_crime_28d: pd.DataFrame | None = None,
+    precinct_crime_14d: pd.DataFrame | None = None,
     priority_concerns: pd.DataFrame | None = None,
     temporal_summary: pd.DataFrame | None = None,
     temporal_matrix: pd.DataFrame | None = None,
@@ -2807,9 +2855,7 @@ def save_combined_interactive_dashboard(
 ) -> None:
     center = [df["latitude"].median(), df["longitude"].median()]
 
-    # Real-world Detroit basemap first; analytical H3 layers sit transparently above it.
-    # Voyager is the default because it keeps street names, major roads, neighborhoods,
-    # parks, and landmarks readable beneath the hotspot polygons.
+    # Use a keyless public basemap by default; analytical H3 layers sit transparently above it.
     m = folium.Map(
         location=center,
         zoom_start=11,
@@ -2818,14 +2864,14 @@ def save_combined_interactive_dashboard(
         prefer_canvas=True,
     )
     folium.TileLayer(
-        tiles="CartoDB Voyager",
-        name="Basemap | Detroit Streets (Recommended)",
+        tiles="OpenStreetMap",
+        name="Basemap | OpenStreetMap (Default)",
         control=True,
         show=True,
     ).add_to(m)
     folium.TileLayer(
-        tiles="OpenStreetMap",
-        name="Basemap | OpenStreetMap",
+        tiles="CartoDB Voyager",
+        name="Basemap | Detroit Streets",
         control=True,
         show=False,
     ).add_to(m)
@@ -2837,17 +2883,17 @@ def save_combined_interactive_dashboard(
     ).add_to(m)
     Fullscreen(position="topright", title="Expand", title_cancel="Exit", force_separate_button=True).add_to(m)
 
-    # Optional underlying event geography: latest 28 days only, so the layer remains
+    # Optional underlying event geography: latest 14 days only, so the layer remains
     # useful and responsive instead of attempting to draw ~200k individual markers.
     date_series = pd.to_datetime(df["incident_occurred_at"], errors="coerce", utc=True)
     latest_date = date_series.max()
     if pd.notna(latest_date):
-        recent_start = latest_date - pd.Timedelta(days=27)
+        recent_start = latest_date - pd.Timedelta(days=RECENT_WINDOW_DAYS - 1)
         recent_points = df.loc[date_series.between(recent_start, latest_date)].copy()
         recent_points = recent_points.dropna(subset=["latitude", "longitude"])
         if not recent_points.empty:
             recent_layer = folium.FeatureGroup(
-                name=f"Locations | Actual Incidents — Latest 28D ({len(recent_points):,})",
+                name=f"Locations | Actual Incidents — Latest 14D ({len(recent_points):,})",
                 show=False,
             )
             FastMarkerCluster(
@@ -3136,8 +3182,30 @@ def save_combined_interactive_dashboard(
     add_focus_category_layers(m, df)
     add_precinct_scope_heatmap_layers(m, df)
     add_crime_type_h3_count_layers(m, df, resolution=resolution, top_n_categories=None)
+    for (neighborhood, precinct), scope_df in df.groupby(["neighborhood", "precinct_norm"], sort=True):
+        scope_specs = [("All Crime", scope_df)]
+        scope_specs.extend([
+            ("Category Focus | Gun-Related", scope_df[scope_df["is_gun_related"]]),
+            ("Category Focus | Property Crime", scope_df[scope_df["is_property_related"]]),
+            ("Category Focus | Larceny", scope_df[scope_df["is_larceny_related"]]),
+        ])
+        scope_specs.extend(
+            (f"Crime Type | {category}", category_df)
+            for category, category_df in scope_df.groupby("offense_category", sort=True)
+        )
+        for category_label, category_df in scope_specs:
+            if category_df.empty:
+                continue
+            layer = folium.FeatureGroup(
+                name=f"Scope | Neighborhood | {neighborhood} | Precinct | {precinct} | {category_label}",
+                show=False,
+            )
+            HeatMap(category_df[["latitude", "longitude"]].values.tolist(), radius=10, blur=12, max_zoom=13).add_to(layer)
+            layer.add_to(m)
+
     # Bounds power precinct auto-zoom while preserving the real street basemap.
     precinct_bounds: dict[str, list[list[float]]] = {}
+    neighborhood_bounds: dict[str, list[list[float]]] = {}
     valid_geo = df.dropna(subset=["latitude", "longitude"]).copy()
     if not valid_geo.empty:
         precinct_bounds["ALL"] = [
@@ -3149,19 +3217,26 @@ def save_combined_interactive_dashboard(
                 [float(g["latitude"].min()), float(g["longitude"].min())],
                 [float(g["latitude"].max()), float(g["longitude"].max())],
             ]
+        for neighborhood, g in valid_geo.groupby("neighborhood"):
+            neighborhood_bounds[str(neighborhood)] = [
+                [float(g["latitude"].min()), float(g["longitude"].min())],
+                [float(g["latitude"].max()), float(g["longitude"].max())],
+            ]
 
     add_top_selector_panel(
         m,
         sorted(df["precinct_norm"].dropna().astype(str).unique().tolist()),
+        sorted(df["neighborhood"].dropna().astype(str).unique().tolist()),
         sorted(df["offense_category"].dropna().astype(str).unique().tolist()),
         precinct_improvement=precinct_improvement,
         precinct_crime_trends=precinct_crime_trends,
-        precinct_crime_28d=precinct_crime_28d,
+        precinct_crime_14d=precinct_crime_14d,
         priority_concerns=priority_concerns,
         temporal_summary=temporal_summary,
         temporal_matrix=temporal_matrix,
         hotspot_change=hotspot_change,
         precinct_bounds=precinct_bounds,
+        neighborhood_bounds=neighborhood_bounds,
         current_year=current_year,
         previous_year=previous_year,
         baseline_year=baseline_year,
@@ -4143,8 +4218,8 @@ def generate_precinct_drilldown_assets(
         shift_img = pdir / f"precinct_{precinct}_shift_summary_{period_tag}.png"
         decision_img = pdir / f"precinct_{precinct}_decision_purpose_{period_tag}.png"
         monthly_img = pdir / f"precinct_{precinct}_monthly_trend_heatmap_{period_tag}.png"
-        violent_type_img = pdir / f"precinct_{precinct}_violent_crime_28d_by_type_{period_tag}.png"
-        violent_day_hour_img = pdir / f"precinct_{precinct}_violent_crime_28d_by_day_hour_{period_tag}.png"
+        violent_type_img = pdir / f"precinct_{precinct}_violent_crime_14d_by_type_{period_tag}.png"
+        violent_day_hour_img = pdir / f"precinct_{precinct}_violent_crime_14d_by_day_hour_{period_tag}.png"
 
         if not p_focus.empty:
             save_focus_locations_map(p_focus, focus_map, top_n=min(40, len(p_focus)))
@@ -4164,8 +4239,8 @@ def generate_precinct_drilldown_assets(
         if not p_monthly.empty:
             save_precinct_monthly_trend_heatmap(p_monthly, monthly_img)
 
-        p_violent_type, p_violent_day_hour = build_violent_28d_summaries(p_df)
-        save_violent_28d_charts(
+        p_violent_type, p_violent_day_hour = build_violent_14d_summaries(p_df)
+        save_violent_14d_charts(
             p_violent_type,
             p_violent_day_hour,
             violent_type_img,
@@ -4196,7 +4271,7 @@ def save_operations_landing_html(
     focus_locations: pd.DataFrame,
     city_ytd: pd.DataFrame,
     precinct_improvement: pd.DataFrame,
-    precinct_crime_28d: pd.DataFrame,
+    precinct_crime_14d: pd.DataFrame,
     precinct_crime_trends: pd.DataFrame,
     priority_concerns: pd.DataFrame,
     temporal_summary: pd.DataFrame,
@@ -4250,7 +4325,7 @@ def save_operations_landing_html(
     if not improvement.empty:
         improvement["precinct_key"] = improvement["precinct_norm"].apply(norm_precinct)
 
-    recent = precinct_crime_28d.copy() if precinct_crime_28d is not None else pd.DataFrame()
+    recent = precinct_crime_14d.copy() if precinct_crime_14d is not None else pd.DataFrame()
     if not recent.empty:
         recent["precinct_key"] = recent["precinct_norm"].apply(norm_precinct)
 
@@ -4352,12 +4427,12 @@ def save_operations_landing_html(
                     "comparison_date": str(r.get("comparison_date", data_through)),
                 }
 
-        # Aggregate recent 28-day all-crime movement by summing crime rows.
+        # Aggregate recent 14-day all-crime movement by summing crime rows.
         prev28 = curr28 = 0
         if not recent.empty:
             rr = recent[recent["precinct_key"].eq(precinct)]
-            prev28 = int(pd.to_numeric(rr["previous_28d"], errors="coerce").fillna(0).sum())
-            curr28 = int(pd.to_numeric(rr["current_28d"], errors="coerce").fillna(0).sum())
+            prev28 = int(pd.to_numeric(rr["previous_14d"], errors="coerce").fillna(0).sum())
+            curr28 = int(pd.to_numeric(rr["current_14d"], errors="coerce").fillna(0).sum())
         recent_pct = 100 * (curr28 - prev28) / prev28 if prev28 else None
 
         # Priority concerns and improvements.
@@ -4367,7 +4442,7 @@ def save_operations_landing_html(
             pp = priorities[priorities["precinct_key"].eq(precinct)].copy()
             if not pp.empty:
                 pp = pp.sort_values(
-                    ["priority_score", "current_28d"],
+                    ["priority_score", "current_14d"],
                     ascending=[False, False],
                 )
                 concern_df = pp[
@@ -4380,10 +4455,10 @@ def save_operations_landing_html(
                 for _, r in concern_df.head(8).iterrows():
                     concern_records.append({
                         "crime": str(r.get("offense_category", "Unknown")),
-                        "previous_28d": clean_number(r.get("previous_28d")),
-                        "current_28d": clean_number(r.get("current_28d")),
-                        "pct_change_28d": clean_number(r.get("pct_change_28d")),
-                        "city_pct_change_28d": clean_number(r.get("city_pct_change_28d")),
+                        "previous_14d": clean_number(r.get("previous_14d")),
+                        "current_14d": clean_number(r.get("current_14d")),
+                        "pct_change_14d": clean_number(r.get("pct_change_14d")),
+                        "city_pct_change_14d": clean_number(r.get("city_pct_change_14d")),
                         "ytd_pct_change": clean_number(r.get("pct_change_vs_previous")),
                         "signal": str(r.get("priority_signal", "Monitor")),
                         "score": clean_number(r.get("priority_score")),
@@ -4391,7 +4466,7 @@ def save_operations_landing_html(
                 for _, r in improve_df.head(5).iterrows():
                     improvement_records.append({
                         "crime": str(r.get("offense_category", "Unknown")),
-                        "pct_change_28d": clean_number(r.get("pct_change_28d")),
+                        "pct_change_14d": clean_number(r.get("pct_change_14d")),
                         "signal": str(r.get("priority_signal", "Recent Improvement")),
                     })
 
@@ -4456,8 +4531,8 @@ def save_operations_landing_html(
                 pr = recent[recent["precinct_key"].eq(precinct)]
                 recent_lookup = {
                     str(r["offense_category"]): {
-                        "recent_pct": clean_number(r.get("pct_change_28d")),
-                        "current_28d": clean_number(r.get("current_28d")),
+                        "recent_pct": clean_number(r.get("pct_change_14d")),
+                        "current_14d": clean_number(r.get("current_14d")),
                     }
                     for _, r in pr.iterrows()
                 }
@@ -4471,7 +4546,7 @@ def save_operations_landing_html(
                     "current_ytd": tr.get("current_ytd"),
                     "ytd_pct_change": tr.get("ytd_pct"),
                     "trend": tr.get("trend", ""),
-                    "current_28d": rc.get("current_28d"),
+                    "current_14d": rc.get("current_14d"),
                     "recent_pct_change": rc.get("recent_pct"),
                 })
 
@@ -4532,7 +4607,7 @@ def save_operations_landing_html(
         if not timing.empty:
             tt = timing[
                 (timing["precinct_key"].eq(precinct))
-                & timing["period"].astype(str).eq("Recent 28D")
+                & timing["period"].astype(str).eq("Recent 14D")
                 & timing["selection_type"].astype(str).eq("All")
                 & timing["selection_name"].astype(str).eq("All")
             ]
@@ -4566,9 +4641,9 @@ def save_operations_landing_html(
         precinct_data[precinct] = {
             "overall": overall,
             "recent": {
-                "previous_28d": int(prev28),
-                "current_28d": int(curr28),
-                "pct_change_28d": recent_pct,
+                "previous_14d": int(prev28),
+                "current_14d": int(curr28),
+                "pct_change_14d": recent_pct,
             },
             "concern_count": concern_count,
             "concerns": concern_records,
@@ -4706,7 +4781,7 @@ th{{color:#475569;font-size:.76rem}} th:first-child,td:first-child{{text-align:l
 
   <div class="section anchor-target" id="crimeSection">
     <h2>Dominant Crime Types — Selected Precinct</h2>
-    <div class="note">Full-period workload with current matched-YTD and recent 28-day direction beside it.</div>
+    <div class="note">Full-period workload with current matched-YTD and recent 14-day direction beside it.</div>
     <div id="dominantCrimes"></div>
   </div>
 
@@ -4888,13 +4963,14 @@ function renderPrecinct(p){{
  document.getElementById('precinctCards').innerHTML=`
  <div class="card"><div class="label">${{city.current_year}} YTD incidents</div><div class="value">${{fmtN(ov.incidents_current)}}</div></div>
  <div class="card"><div class="label">vs ${{city.previous_year}} YTD</div><div class="value ${{pctClass(ov.pct_change_vs_previous)}}">${{fmtPct(ov.pct_change_vs_previous)}}</div></div>
- <div class="card"><div class="label">${{customRange?'Custom current range':'Current 28 days'}}</div><div class="value">${{fmtN(rec.current_28d)}}</div><div class="note ${{pctClass(rec.pct_change_28d)}}">${{fmtPct(rec.pct_change_28d)}} vs ${{customRange?'custom previous range':'prior 28D'}}</div></div>
+ <div class="card"><div class="label">${{customRange?'Custom current range':'Current 14 days'}}</div><div class="value">${{fmtN(customRange?rec.current_28d:rec.current_14d)}}</div><div class="note ${{pctClass(customRange?rec.pct_change_28d:rec.pct_change_14d)}}">${{fmtPct(customRange?rec.pct_change_28d:rec.pct_change_14d)}} vs ${{customRange?'custom previous range':'prior 14D'}}</div></div>
  <div class="card"><div class="label">Priority concerns</div><div class="value">${{fmtN((concernsOverride||d.concerns||[]).length)}}</div></div>
  <div class="card"><div class="label">Focus locations</div><div class="value">${{fmtN((d.focus_locations||[]).length)}}</div></div>`;
 
  let s=[];
  if(ov.pct_change_vs_previous!==null&&ov.pct_change_vs_previous!==undefined)s.push(`Overall matched-YTD incidents are ${{Math.abs(Number(ov.pct_change_vs_previous)).toFixed(1)}}% ${{Number(ov.pct_change_vs_previous)<0?'below':'above'}} ${{city.previous_year}}.`);
- if(rec.pct_change_28d!==null&&rec.pct_change_28d!==undefined)s.push(`Recent activity moved from ${{fmtN(rec.previous_28d)}} to ${{fmtN(rec.current_28d)}} incidents (${{fmtPct(rec.pct_change_28d)}}).`);
+ if(customRange && rec.pct_change_28d!==null && rec.pct_change_28d!==undefined)s.push(`Recent activity moved from ${{fmtN(rec.previous_28d)}} to ${{fmtN(rec.current_28d)}} incidents (${{fmtPct(rec.pct_change_28d)}}).`);
+ else if(rec.pct_change_14d!==null&&rec.pct_change_14d!==undefined)s.push(`Recent activity moved from ${{fmtN(rec.previous_14d)}} to ${{fmtN(rec.current_14d)}} incidents (${{fmtPct(rec.pct_change_14d)}}).`);
  const concernsForBrief=concernsOverride||d.concerns;
  if(concernsForBrief&&concernsForBrief.length)s.push(`${{concernsForBrief[0].crime}} is the leading current attention signal (${{concernsForBrief[0].signal}}).`);
  if(d.timing)s.push(`Recent activity peaks on ${{d.timing.peak_day}} around ${{hourLabel(d.timing.peak_hour)}}, with ${{d.timing.peak_time_block}} as the busiest broad time block.`);
@@ -4908,8 +4984,8 @@ function renderPrecinct(p){{
    assetLink(a.shift_chart,'Open Shift Summary Chart'),
    assetLink(a.decision_chart,'Open Decision Purpose Chart'),
    assetLink(a.monthly_heatmap,'Open Precinct Monthly Trend Heatmap'),
-   assetLink(a.violent_type_chart,'Open Violent Crime 28-Day Type Breakdown'),
-   assetLink(a.violent_day_hour,'Open Violent Crime 28-Day Day/Hour')
+   assetLink(a.violent_type_chart,'Open Violent Crime 14-Day Type Breakdown'),
+   assetLink(a.violent_day_hour,'Open Violent Crime 14-Day Day/Hour')
  ].filter(Boolean).join('');
  document.getElementById('modernLinks').innerHTML=[
    assetLink(analysisUrl(p,'trends'),'Open Crime Trend Analysis'),
@@ -4942,11 +5018,34 @@ function renderPrecinct(p){{
  document.getElementById('worseningDrivers').innerHTML=simpleTable(['Crime',city.previous_year,city.current_year,'% change','Trend'],wd);
  document.getElementById('improvingDrivers').innerHTML=simpleTable(['Crime',city.previous_year,city.current_year,'% change','Trend'],id);
 
- const dc=(crimeRecordsOverride||d.dominant_crimes||[]).map(r=>[r.crime,fmtN(r.incident_count),fmtShare(r.share),fmtN(r.current_ytd),fmtPct(r.ytd_pct_change),r.trend||'—',fmtN(r.current_28d),fmtPct(r.recent_pct_change)]);
- document.getElementById('dominantCrimes').innerHTML=simpleTable(['Crime','All-period incidents','Share',city.current_year+' YTD','YTD %chg','YTD trend',customRange?'Custom Range':'Current 28D',customRange?'Range %chg':'28D %chg'],dc);
+ const dc=(crimeRecordsOverride||d.dominant_crimes||[]).map(r=>[
+   r.crime,
+   fmtN(r.incident_count),
+   fmtShare(r.share),
+   fmtN(r.current_ytd),
+   fmtPct(r.ytd_pct_change),
+   r.trend||'—',
+   fmtN(customRange?r.current_28d:r.current_14d),
+   fmtPct(r.recent_pct_change)
+ ]);
+ document.getElementById('dominantCrimes').innerHTML=simpleTable(
+   ['Crime','All-period incidents','Share',city.current_year+' YTD','YTD %chg','YTD trend',customRange?'Custom Range':'Current 14D',customRange?'Range %chg':'14D %chg'],
+   dc
+ );
 
- const cr=(concernsOverride||d.concerns||[]).map(r=>[r.crime,fmtN(r.previous_28d),fmtN(r.current_28d),fmtPct(r.pct_change_28d),fmtPct(r.city_pct_change_28d),fmtPct(r.ytd_pct_change),`<span class="signal ${{signalClass(r.signal)}}">${{r.signal}}</span>`]);
- document.getElementById('concernsTable').innerHTML=simpleTable(['Crime',customRange?'Prev Range':'Prev 28D',customRange?'Current Range':'Current 28D',customRange?'Range %chg':'28D','City','YTD','Signal'],cr);
+ const cr=(concernsOverride||d.concerns||[]).map(r=>[
+   r.crime,
+   fmtN(customRange?r.previous_28d:r.previous_14d),
+   fmtN(customRange?r.current_28d:r.current_14d),
+   fmtPct(customRange?r.pct_change_28d:r.pct_change_14d),
+   fmtPct(customRange?r.city_pct_change_28d:r.city_pct_change_14d),
+   fmtPct(r.ytd_pct_change),
+   `<span class="signal ${{signalClass(r.signal)}}">${{r.signal}}</span>`
+ ]);
+ document.getElementById('concernsTable').innerHTML=simpleTable(
+   ['Crime',customRange?'Prev Range':'Prev 14D',customRange?'Current Range':'Current 14D',customRange?'Range %chg':'14D','City','YTD','Signal'],
+   cr
+ );
 
  const sh=(d.shift_summary||[]).map(r=>[r.shift,fmtN(r.incidents),r.dominant_offense,fmtN(r.dominant_offense_count),fmtShare(r.dominant_offense_share)]);
  document.getElementById('shiftSummary').innerHTML=simpleTable(['Shift','Incidents','Dominant crime','Dominant count','Share'],sh);
@@ -5108,7 +5207,7 @@ def save_decision_dashboard_html(
                 <a href="../Images/detroit_shift_incidents_{period_tag}.png" target="_blank">Open Shift Summary Chart</a>
                 <a href="../Images/detroit_decision_purpose_incidents_{period_tag}.png" target="_blank">Open Decision Purpose Chart</a>
             <a href="../Images/detroit_precinct_monthly_trend_heatmap_{period_tag}.png" target="_blank">Open Precinct Monthly Trend Heatmap</a>
-    <a href="../Images/detroit_violent_crime_28d_by_day_hour_{period_tag}.png" target="_blank">Open Violent Crime 28-Day Day/Hour</a>
+    <a href="../Images/detroit_violent_crime_14d_by_day_hour_{period_tag}.png" target="_blank">Open Violent Crime 14-Day Day/Hour</a>
   </div>
 
     <h2>Layer Color Key (Decision Purpose)</h2>
@@ -5206,7 +5305,7 @@ def main() -> None:
         previous_year=previous_year,
         baseline_year=baseline_year,
     )
-    precinct_crime_28d = build_precinct_crime_28d_comparison(
+    precinct_crime_14d = build_precinct_crime_14d_comparison(
         df,
         current_year=current_year,
     )
@@ -5218,12 +5317,64 @@ def main() -> None:
     )
     priority_concerns = build_priority_emerging_concerns(
         precinct_crime_trends,
-        precinct_crime_28d,
+        precinct_crime_14d,
     )
     temporal_patterns = build_temporal_pattern_profiles(df, current_year=current_year)
     temporal_summary = temporal_patterns["summary"]
     temporal_matrix = temporal_patterns["matrix"]
     hotspot_change = build_hotspot_persistence_change(df, current_year=current_year)
+
+    # The combined dashboard needs records calculated within, rather than merely
+    # labeled with, the selected neighborhood. Keep the citywide records as ALL.
+    precinct_improvement = add_neighborhood_scopes(
+        df,
+        precinct_improvement,
+        lambda scoped: build_precinct_improvement_table(
+            scoped, current_year, previous_year, baseline_year
+        ),
+    )
+    precinct_crime_14d = add_neighborhood_scopes(
+        df,
+        precinct_crime_14d,
+        lambda scoped: build_precinct_crime_14d_comparison(scoped, current_year),
+    )
+    precinct_crime_trends = add_neighborhood_scopes(
+        df,
+        precinct_crime_trends,
+        lambda scoped: build_precinct_crime_trend_table(
+            scoped, current_year, previous_year, baseline_year
+        ),
+    )
+    priority_frames = [priority_concerns.assign(neighborhood_scope="ALL")]
+    temporal_summary_frames = [temporal_summary.assign(neighborhood_scope="ALL")]
+    temporal_matrix_frames = [temporal_matrix.assign(neighborhood_scope="ALL")]
+    hotspot_frames = [hotspot_change.assign(neighborhood_scope="ALL")]
+    for neighborhood, scoped in df.groupby("neighborhood", sort=True):
+        scoped_recent = build_precinct_crime_14d_comparison(scoped, current_year)
+        scoped_trends = build_precinct_crime_trend_table(
+            scoped, current_year, previous_year, baseline_year
+        )
+        priority_frames.append(
+            build_priority_emerging_concerns(scoped_trends, scoped_recent).assign(
+                neighborhood_scope=str(neighborhood)
+            )
+        )
+        scoped_temporal = build_temporal_pattern_profiles(scoped, current_year)
+        temporal_summary_frames.append(
+            scoped_temporal["summary"].assign(neighborhood_scope=str(neighborhood))
+        )
+        temporal_matrix_frames.append(
+            scoped_temporal["matrix"].assign(neighborhood_scope=str(neighborhood))
+        )
+        hotspot_frames.append(
+            build_hotspot_persistence_change(scoped, current_year).assign(
+                neighborhood_scope=str(neighborhood)
+            )
+        )
+    priority_concerns = pd.concat(priority_frames, ignore_index=True)
+    temporal_summary = pd.concat(temporal_summary_frames, ignore_index=True)
+    temporal_matrix = pd.concat(temporal_matrix_frames, ignore_index=True)
+    hotspot_change = pd.concat(hotspot_frames, ignore_index=True)
 
     # Primary entry point + interactive drill-down.
     operations_overview_html = DOCS_DIR / f"detroit_crime_operations_overview_{period_tag}.html"
@@ -5254,7 +5405,7 @@ def main() -> None:
         else f"{previous_year}_vs_{current_year}"
     )
     precinct_improvement_csv = DOCS_DIR / f"precinct_improvement_ytd_{improvement_year_tag}.csv"
-    precinct_crime_28d_csv = DOCS_DIR / f"precinct_crime_28d_comparison_{current_year}.csv"
+    precinct_crime_14d_csv = DOCS_DIR / f"precinct_crime_14d_comparison_{current_year}.csv"
     precinct_crime_trends_csv = DOCS_DIR / f"precinct_crime_type_trends_ytd_{improvement_year_tag}.csv"
     priority_concerns_csv = DOCS_DIR / f"priority_emerging_concerns_{current_year}.csv"
     temporal_summary_csv = DOCS_DIR / f"temporal_pattern_summary_{current_year}.csv"
@@ -5267,7 +5418,7 @@ def main() -> None:
         focus_locations=focus_locations,
         city_ytd=city_ytd,
         precinct_improvement=precinct_improvement,
-        precinct_crime_28d=precinct_crime_28d,
+        precinct_crime_14d=precinct_crime_14d,
         precinct_crime_trends=precinct_crime_trends,
         priority_concerns=priority_concerns,
         temporal_summary=temporal_summary,
@@ -5299,7 +5450,7 @@ def main() -> None:
         combined_dashboard_html,
         precinct_improvement=precinct_improvement,
         precinct_crime_trends=precinct_crime_trends,
-        precinct_crime_28d=precinct_crime_28d,
+        precinct_crime_14d=precinct_crime_14d,
         priority_concerns=priority_concerns,
         temporal_summary=temporal_summary,
         temporal_matrix=temporal_matrix,
@@ -5314,7 +5465,7 @@ def main() -> None:
     city_ytd.to_csv(city_ytd_csv, index=False)
     precinct_ytd.to_csv(precinct_ytd_csv, index=False)
     precinct_improvement.to_csv(precinct_improvement_csv, index=False)
-    precinct_crime_28d.to_csv(precinct_crime_28d_csv, index=False)
+    precinct_crime_14d.to_csv(precinct_crime_14d_csv, index=False)
     precinct_crime_trends.to_csv(precinct_crime_trends_csv, index=False)
     priority_concerns.to_csv(priority_concerns_csv, index=False)
     temporal_summary.to_csv(temporal_summary_csv, index=False)
@@ -5342,7 +5493,7 @@ def main() -> None:
         city_ytd_csv,
         precinct_ytd_csv,
         precinct_improvement_csv,
-        precinct_crime_28d_csv,
+        precinct_crime_14d_csv,
         precinct_crime_trends_csv,
         priority_concerns_csv,
         temporal_summary_csv,
