@@ -5092,7 +5092,7 @@ th{{color:#475569;font-size:.76rem}} th:first-child,td:first-child{{text-align:l
       <div class="city-map-callout">
         <b>Need the citywide spatial view?</b>
         <div class="note" style="margin-top:4px;">Open the existing Detroit interactive map. Custom layer building remains available from inside a selected precinct.</div>
-        <div class="city-actions"><a class="secondary-action" href="../Images/{map_filename}?section=map" target="_blank">Open Detroit Interactive Map</a></div>
+        <div class="city-actions"><a class="secondary-action" href="../Images/{area_map_filename}" target="_blank">Open Detroit Interactive Map</a></div>
       </div>
     </div>
   </div>
