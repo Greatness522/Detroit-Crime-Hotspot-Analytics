@@ -136,7 +136,7 @@ crimeSelect.addEventListener('change',()=>populateDescriptions(crimeSelect.value
 
 const qs=new URLSearchParams(window.location.search),selectedPrecinct=(qs.get('precinct')||'').trim().toUpperCase(),precinctIndex=precincts.indexOf(selectedPrecinct);
 const map=L.map('map').setView([42.3468,-83.0700],11);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
 
 function dateOffset(s){if(!baseDate||!s)return null;const d=new Date(s+'T00:00:00Z');return Math.round((d-baseDate)/86400000);}
 function populateNeighborhoods(){areaSelect.innerHTML='<option value="">All neighborhoods in Precinct '+selectedPrecinct+'</option>';(neighborhoodsByPrecinct[selectedPrecinct]||[]).forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=n;areaSelect.appendChild(o);});}
