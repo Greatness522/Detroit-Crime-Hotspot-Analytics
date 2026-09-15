@@ -2411,7 +2411,7 @@ def save_cluster_map(df: pd.DataFrame, out_path: Path) -> None:
 
 def save_folium_heatmap(df: pd.DataFrame, out_path: Path) -> None:
     center = [df["latitude"].median(), df["longitude"].median()]
-    m = folium.Map(location=center, zoom_start=11, tiles="CartoDB positron")
+    m = folium.Map(location=center, zoom_start=11, tiles="OpenStreetMap")
 
     heat_data = df[["latitude", "longitude"]].values.tolist()
     HeatMap(heat_data, radius=10, blur=12, max_zoom=13).add_to(m)
@@ -2424,7 +2424,7 @@ def save_spike_marker_map(spike_points: pd.DataFrame, out_path: Path) -> None:
         return
 
     center = [spike_points["latitude"].median(), spike_points["longitude"].median()]
-    m = folium.Map(location=center, zoom_start=11, tiles="CartoDB positron")
+    m = folium.Map(location=center, zoom_start=11, tiles="OpenStreetMap")
 
     for _, row in spike_points.iterrows():
         radius = max(6, min(20, row["incident_count"] * 0.8))
@@ -2456,7 +2456,7 @@ def save_interactive_h3_choropleth(df: pd.DataFrame, out_path: Path, resolution:
     cell_counts = build_h3_count_layer_data(df, resolution)
 
     center = [temp["latitude"].median(), temp["longitude"].median()]
-    m = folium.Map(location=center, zoom_start=11, tiles="CartoDB positron")
+    m = folium.Map(location=center, zoom_start=11, tiles="OpenStreetMap")
     Fullscreen(position="topright", title="Expand", title_cancel="Exit", force_separate_button=True).add_to(m)
 
     density_layer = folium.FeatureGroup(name="Density | All Incidents Heatmap", show=False)
@@ -2673,7 +2673,7 @@ def save_interactive_h3_spike_severity_choropleth(
     )
 
     center = [temp["latitude"].median(), temp["longitude"].median()]
-    m = folium.Map(location=center, zoom_start=11, tiles="CartoDB positron")
+    m = folium.Map(location=center, zoom_start=11, tiles="OpenStreetMap")
     Fullscreen(position="topright", title="Expand", title_cancel="Exit", force_separate_button=True).add_to(m)
 
     density_layer = folium.FeatureGroup(name="Density | All Incidents Heatmap", show=False)
@@ -2818,7 +2818,7 @@ def save_interactive_offense_type_heatmaps(df: pd.DataFrame, out_path: Path, top
     top_categories = offense_counts.index.tolist()
 
     center = [df["latitude"].median(), df["longitude"].median()]
-    m = folium.Map(location=center, zoom_start=11, tiles="CartoDB positron")
+    m = folium.Map(location=center, zoom_start=11, tiles="OpenStreetMap")
 
     for idx, category in enumerate(top_categories):
         subset = df[df["offense_category"] == category]
@@ -2869,18 +2869,7 @@ def save_combined_interactive_dashboard(
         control=True,
         show=True,
     ).add_to(m)
-    folium.TileLayer(
-        tiles="CartoDB Voyager",
-        name="Basemap | Detroit Streets",
-        control=True,
-        show=False,
-    ).add_to(m)
-    folium.TileLayer(
-        tiles="CartoDB positron",
-        name="Basemap | Light Analytical",
-        control=True,
-        show=False,
-    ).add_to(m)
+
     Fullscreen(position="topright", title="Expand", title_cancel="Exit", force_separate_button=True).add_to(m)
 
     # Optional underlying event geography: latest 14 days only, so the layer remains
@@ -3368,7 +3357,7 @@ def add_marker_cluster_layer(
 def save_focus_locations_map(focus: pd.DataFrame, out_path: Path, top_n: int = 40) -> None:
     top = focus.head(top_n).copy()
     center = [top["latitude"].median(), top["longitude"].median()]
-    m = folium.Map(location=center, zoom_start=11, tiles="CartoDB positron")
+    m = folium.Map(location=center, zoom_start=11, tiles="OpenStreetMap")
 
     colormap = cm.LinearColormap(
         colors=["#fee5d9", "#fcae91", "#fb6a4a", "#cb181d"],
