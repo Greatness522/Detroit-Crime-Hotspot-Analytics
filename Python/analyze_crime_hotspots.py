@@ -3857,7 +3857,7 @@ def build_daily_precinct_category_counts(df: pd.DataFrame, precincts: list[str])
     """Compact daily precinct x crime-category incident counts.
 
     Shipped to the dashboard so users can manually pick arbitrary "previous"
-    and "current" date ranges instead of only the automated trailing 28 days.
+    and "current" date ranges instead of only the automated trailing 14 days.
     Encoded as index-referenced rows (precinct index, category index, day
     offset from base_date, count) to keep the JSON payload small.
     """
@@ -3887,6 +3887,77 @@ def build_daily_precinct_category_counts(df: pd.DataFrame, precincts: list[str])
             precinct_idx[r.precinct_key],
             category_idx[r.offense_category],
             int((r.incident_date - base_date).days),
+            int(r.count),
+        ]
+        for r in counts.itertuples(index=False)
+    ]
+
+    return {
+        "precincts": precinct_list,
+        "categories": category_list,
+        "base_date": base_date.strftime("%Y-%m-%d"),
+        "rows": rows,
+    }
+
+
+def build_hourly_precinct_category_counts(df: pd.DataFrame, precincts: list[str]) -> dict:
+    """Compact daily precinct x crime-category x hour incident counts.
+
+    Shipped to the dashboard so custom date ranges can recompute shift-level
+    demand and timing patterns without sending individual incident records
+    to the browser.
+
+    Rows are encoded as:
+    [precinct index, category index, day offset, hour, count]
+    """
+    temp = df.copy()
+    temp["incident_date"] = pd.to_datetime(temp["incident_date"])
+    temp["precinct_key"] = temp["precinct_norm"].apply(_norm_operational_precinct)
+    temp["offense_category"] = temp["offense_category"].astype(str).str.upper()
+    temp["incident_hour_of_day"] = pd.to_numeric(
+        temp["incident_hour_of_day"], errors="coerce"
+    )
+
+    temp = temp[
+        temp["precinct_key"].isin(precincts)
+        & temp["incident_hour_of_day"].notna()
+    ].copy()
+
+    if temp.empty:
+        return {
+            "precincts": [],
+            "categories": [],
+            "base_date": None,
+            "rows": [],
+        }
+
+    temp["incident_hour_of_day"] = temp["incident_hour_of_day"].astype(int)
+
+    counts = (
+        temp.groupby(
+            [
+                "precinct_key",
+                "offense_category",
+                "incident_date",
+                "incident_hour_of_day",
+            ]
+        )
+        .size()
+        .reset_index(name="count")
+    )
+
+    precinct_list = sorted(counts["precinct_key"].unique().tolist())
+    category_list = sorted(counts["offense_category"].unique().tolist())
+    precinct_idx = {p: i for i, p in enumerate(precinct_list)}
+    category_idx = {c: i for i, c in enumerate(category_list)}
+    base_date = counts["incident_date"].min()
+
+    rows = [
+        [
+            precinct_idx[r.precinct_key],
+            category_idx[r.offense_category],
+            int((r.incident_date - base_date).days),
+            int(r.incident_hour_of_day),
             int(r.count),
         ]
         for r in counts.itertuples(index=False)
@@ -3939,245 +4010,482 @@ def build_neighborhood_boundaries(df: pd.DataFrame, min_incidents: int = 10) -> 
 
 
 def build_area_crime_points(df: pd.DataFrame) -> dict:
-    """Compact point-level export for the Area + Crime Type map builder.
+    """Point-level export for the precinct-scoped additive map builder.
 
-    Encodes every incident's coordinates plus index references into a
-    neighborhood list and an offense-category list, so the browser can
-    filter to "this neighborhood, this crime type" without any server
-    round-trip and place one marker per matching incident.
+    The browser can display the full precinct first, optionally narrow to a
+    neighborhood, then filter by dates, crime type, and crime description.
+    Each exported incident also carries its best available location label and
+    occurred time so map popups can show operational detail.
     """
-    temp = df.dropna(subset=["latitude", "longitude", "neighborhood", "offense_category"]).copy()
-    temp["neighborhood"] = temp["neighborhood"].astype(str)
-    temp["offense_category"] = temp["offense_category"].astype(str).str.upper()
+    required = [
+        "latitude", "longitude", "neighborhood", "offense_category",
+        "offense_description", "incident_date", "incident_occurred_at",
+    ]
+    temp = df.dropna(subset=required).copy()
+    temp["precinct_key"] = temp["precinct_norm"].apply(_norm_operational_precinct)
+    valid_precincts = set(_operational_precinct_values(temp))
+    temp = temp[temp["precinct_key"].isin(valid_precincts)].copy()
+    temp["neighborhood"] = temp["neighborhood"].astype(str).str.strip()
+    temp["offense_category"] = temp["offense_category"].astype(str).str.upper().str.strip()
+    temp["offense_description"] = temp["offense_description"].astype(str).str.strip()
+    temp["incident_date"] = pd.to_datetime(temp["incident_date"])
 
+    # Use a true address field when one exists. Otherwise fall back to the
+    # RMS nearest-intersection field. If neither is available, coordinates
+    # remain the final transparent fallback.
+    address_candidates = [
+        "incident_address", "street_address", "address",
+        "location_address", "block_address",
+    ]
+    address_col = next((c for c in address_candidates if c in temp.columns), None)
+    if address_col:
+        address_text = temp[address_col].fillna("").astype(str).str.strip()
+    else:
+        address_text = pd.Series("", index=temp.index, dtype="object")
+
+    if "nearest_intersection" in temp.columns:
+        intersection_text = temp["nearest_intersection"].fillna("").astype(str).str.strip()
+    else:
+        intersection_text = pd.Series("", index=temp.index, dtype="object")
+
+    bad = {"", "UNKNOWN", "NAN", "NONE", "<NA>"}
+    location_labels = []
+    for idx, row in temp.iterrows():
+        a = str(address_text.loc[idx]).strip()
+        x = str(intersection_text.loc[idx]).strip()
+        if a.upper() not in bad:
+            location_labels.append(a)
+        elif x.upper() not in bad:
+            location_labels.append(x)
+        else:
+            location_labels.append(f"{float(row['latitude']):.5f}, {float(row['longitude']):.5f}")
+    temp["map_location"] = location_labels
+
+    # Keep the dashboard's existing date-filter semantics, but expose a
+    # readable incident date/time in the popup.
+    occurred = pd.to_datetime(temp["incident_occurred_at"], errors="coerce", utc=True)
+    temp["map_incident_date"] = occurred.dt.strftime("%Y-%m-%d").fillna("")
+    temp["map_incident_time"] = occurred.dt.strftime("%I:%M %p").fillna("Unknown time")
+
+    precinct_list = sorted(
+        temp["precinct_key"].unique().tolist(),
+        key=lambda x: (0, int(x)) if str(x).isdigit() else (1, str(x)),
+    )
     neighborhood_list = sorted(temp["neighborhood"].unique().tolist())
     category_list = sorted(temp["offense_category"].unique().tolist())
+    description_list = sorted(temp["offense_description"].unique().tolist())
+    location_list = sorted(temp["map_location"].unique().tolist())
+    incident_date_list = sorted(temp["map_incident_date"].unique().tolist())
+    incident_time_list = sorted(temp["map_incident_time"].unique().tolist())
+
+    precinct_idx = {p: i for i, p in enumerate(precinct_list)}
     neighborhood_idx = {n: i for i, n in enumerate(neighborhood_list)}
     category_idx = {c: i for i, c in enumerate(category_list)}
+    description_idx = {d: i for i, d in enumerate(description_list)}
+    location_idx = {v: i for i, v in enumerate(location_list)}
+    incident_date_idx = {v: i for i, v in enumerate(incident_date_list)}
+    incident_time_idx = {v: i for i, v in enumerate(incident_time_list)}
+    base_date = temp["incident_date"].min()
 
+    # [lat, lng, precinct, neighborhood, category, description,
+    #  day_offset, location, incident_date, incident_time]
     points = [
         [
             round(float(r.latitude), 6),
             round(float(r.longitude), 6),
+            precinct_idx[r.precinct_key],
             neighborhood_idx[r.neighborhood],
             category_idx[r.offense_category],
+            description_idx[r.offense_description],
+            int((r.incident_date - base_date).days),
+            location_idx[r.map_location],
+            incident_date_idx[r.map_incident_date],
+            incident_time_idx[r.map_incident_time],
         ]
         for r in temp.itertuples(index=False)
     ]
 
+    neighborhoods_by_precinct = {
+        str(p): sorted(g["neighborhood"].dropna().astype(str).unique().tolist())
+        for p, g in temp.groupby("precinct_key", sort=True)
+    }
+    descriptions_by_category = {
+        str(c): sorted(g["offense_description"].dropna().astype(str).unique().tolist())
+        for c, g in temp.groupby("offense_category", sort=True)
+    }
+
+    neighborhood_boundaries = build_neighborhood_boundaries(temp)
+    precinct_boundaries = {}
+    for precinct, grp in temp.groupby("precinct_key", sort=True):
+        coords = grp[["latitude", "longitude"]].dropna()
+        if len(coords) < 3:
+            continue
+        lat_min, lat_max = float(coords["latitude"].min()), float(coords["latitude"].max())
+        lng_min, lng_max = float(coords["longitude"].min()), float(coords["longitude"].max())
+        lat_pad = max((lat_max - lat_min) * 0.03, 0.001)
+        lng_pad = max((lng_max - lng_min) * 0.03, 0.001)
+        precinct_boundaries[str(precinct)] = [
+            [round(lat_min - lat_pad, 6), round(lng_min - lng_pad, 6)],
+            [round(lat_min - lat_pad, 6), round(lng_max + lng_pad, 6)],
+            [round(lat_max + lat_pad, 6), round(lng_max + lng_pad, 6)],
+            [round(lat_max + lat_pad, 6), round(lng_min - lng_pad, 6)],
+            [round(lat_min - lat_pad, 6), round(lng_min - lng_pad, 6)],
+        ]
+
     return {
+        "precincts": precinct_list,
         "neighborhoods": neighborhood_list,
+        "neighborhoods_by_precinct": neighborhoods_by_precinct,
         "categories": category_list,
-        "boundaries": build_neighborhood_boundaries(temp),
+        "descriptions": description_list,
+        "descriptions_by_category": descriptions_by_category,
+        "locations": location_list,
+        "incident_dates": incident_date_list,
+        "incident_times": incident_time_list,
+        "neighborhood_boundaries": neighborhood_boundaries,
+        "precinct_boundaries": precinct_boundaries,
+        "base_date": base_date.strftime("%Y-%m-%d") if pd.notna(base_date) else None,
+        "min_date": temp["incident_date"].min().strftime("%Y-%m-%d") if not temp.empty else None,
+        "max_date": temp["incident_date"].max().strftime("%Y-%m-%d") if not temp.empty else None,
         "points": points,
     }
 
-
 CRIME_ICON_SPECS = {
-    "ASSAULT": {"symbol": "\u2694", "color": "#b91c1c"},
-    "AGGRAVATED ASSAULT": {"symbol": "\u2694", "color": "#7f1d1d"},
-    "HOMICIDE": {"symbol": "\u2620", "color": "#450a0a"},
-    "ROBBERY": {"symbol": "\U0001f4b0", "color": "#9a3412"},
-    "WEAPONS OFFENSES": {"symbol": "\U0001f52b", "color": "#78350f"},
-    "SEX OFFENSES": {"symbol": "\u26a0", "color": "#831843"},
-    "SEXUAL ASSAULT": {"symbol": "\u26a0", "color": "#831843"},
-    "KIDNAPPING": {"symbol": "\u26d3", "color": "#581c87"},
-    "LARCENY": {"symbol": "\U0001f45c", "color": "#1d4ed8"},
-    "BURGLARY": {"symbol": "\U0001f3e0", "color": "#0369a1"},
-    "STOLEN VEHICLE": {"symbol": "\U0001f697", "color": "#0e7490"},
-    "STOLEN PROPERTY": {"symbol": "\U0001f4e6", "color": "#0f766e"},
-    "DAMAGE TO PROPERTY": {"symbol": "\U0001f528", "color": "#a16207"},
-    "ARSON": {"symbol": "\U0001f525", "color": "#c2410c"},
-    "FRAUD": {"symbol": "\U0001f4b3", "color": "#4338ca"},
-    "FORGERY": {"symbol": "\u270d", "color": "#4338ca"},
-    "EMBEZZLEMENT": {"symbol": "\U0001f4bc", "color": "#4338ca"},
-    "BRIBERY": {"symbol": "\U0001f91d", "color": "#4338ca"},
-    "DANGEROUS DRUGS": {"symbol": "\U0001f48a", "color": "#166534"},
-    "OUIL": {"symbol": "\U0001f37a", "color": "#854d0e"},
-    "OBSTRUCTING THE POLICE": {"symbol": "\U0001f6a8", "color": "#334155"},
-    "OBSTRUCTING JUDICIARY": {"symbol": "\U0001f6a8", "color": "#334155"},
-    "FAMILY OFFENSE": {"symbol": "\U0001f3e1", "color": "#7c2d12"},
-    "INVASION OF PRIVACY -OTHER": {"symbol": "\U0001f441", "color": "#6d28d9"},
-    "DISORDERLY CONDUCT": {"symbol": "\u203c", "color": "#57534e"},
-    "RUNAWAY": {"symbol": "\U0001f6b6", "color": "#57534e"},
-    "EXTORTION": {"symbol": "\U0001f4dd", "color": "#4338ca"},
-    "HEALTH AND SAFETY": {"symbol": "\u2695", "color": "#065f46"},
-    "LIQUOR": {"symbol": "\U0001f37b", "color": "#854d0e"},
+    "ASSAULT": {"symbol": "✹", "color": "#b91c1c", "shape": "circle"},
+    "AGGRAVATED ASSAULT": {"symbol": "⚠", "color": "#7f1d1d", "shape": "diamond"},
+    "HOMICIDE": {"symbol": "◎", "color": "#450a0a", "shape": "square"},
+    "ROBBERY": {"symbol": "◆", "color": "#9a3412", "shape": "hex"},
+    "SEXUAL ASSAULT": {"symbol": "!", "color": "#831843", "shape": "triangle"},
+    "SEX OFFENSES": {"symbol": "!", "color": "#9d174d", "shape": "triangle"},
+    "LARCENY": {"symbol": "▣", "color": "#1d4ed8", "shape": "circle"},
+    "BURGLARY": {"symbol": "⌂", "color": "#0369a1", "shape": "square"},
+    "STOLEN VEHICLE": {"symbol": "🚗", "color": "#0e7490", "shape": "diamond"},
+    "STOLEN PROPERTY": {"symbol": "▤", "color": "#0f766e", "shape": "hex"},
+    "DAMAGE TO PROPERTY": {"symbol": "✕", "color": "#a16207", "shape": "square"},
+    "ARSON": {"symbol": "♨", "color": "#c2410c", "shape": "triangle"},
+    "WEAPONS OFFENSES": {"symbol": "⚠", "color": "#78350f", "shape": "diamond"},
+    "KIDNAPPING": {"symbol": "!", "color": "#581c87", "shape": "hex"},
+    "FRAUD": {"symbol": "$", "color": "#4338ca", "shape": "circle"},
+    "FORGERY": {"symbol": "✎", "color": "#4338ca", "shape": "square"},
+    "EMBEZZLEMENT": {"symbol": "$", "color": "#4338ca", "shape": "diamond"},
+    "BRIBERY": {"symbol": "$", "color": "#4338ca", "shape": "hex"},
+    "DANGEROUS DRUGS": {"symbol": "✚", "color": "#166534", "shape": "circle"},
+    "OUIL": {"symbol": "🚗", "color": "#854d0e", "shape": "diamond"},
+    "OBSTRUCTING THE POLICE": {"symbol": "✦", "color": "#334155", "shape": "square"},
+    "OBSTRUCTING JUDICIARY": {"symbol": "§", "color": "#334155", "shape": "hex"},
+    "FAMILY OFFENSE": {"symbol": "!", "color": "#7c2d12", "shape": "circle"},
+    "INVASION OF PRIVACY -OTHER": {"symbol": "◉", "color": "#6d28d9", "shape": "diamond"},
+    "DISORDERLY CONDUCT": {"symbol": "!", "color": "#57534e", "shape": "square"},
+    "RUNAWAY": {"symbol": "➜", "color": "#57534e", "shape": "circle"},
+    "EXTORTION": {"symbol": "$", "color": "#4338ca", "shape": "hex"},
+    "HEALTH AND SAFETY": {"symbol": "✚", "color": "#065f46", "shape": "triangle"},
+    "LIQUOR": {"symbol": "◇", "color": "#854d0e", "shape": "circle"},
 }
-CRIME_ICON_DEFAULT = {"symbol": "\u25cf", "color": "#334155"}
+CRIME_ICON_DEFAULT = {"symbol": "•", "color": "#334155", "shape": "circle"}
 
 
 def save_area_crime_map_builder_html(area_crime_data: dict, out_path: Path) -> None:
-    """Standalone Leaflet page: pick a neighborhood, layer crime-type icons on it.
-
-    Distinct from the pre-baked combined dashboard — this page lets a viewer
-    build up their own view interactively: choose an area (drawn as an
-    approximate outline), add one or more crime-type icon layers scoped to
-    that area, and reset to start over, all without regenerating the page.
-    """
-    icon_specs = {cat: CRIME_ICON_SPECS.get(cat, CRIME_ICON_DEFAULT) for cat in area_crime_data["categories"]}
+    """Dedicated precinct-scoped custom GIS workspace."""
+    icon_specs = {
+        cat: CRIME_ICON_SPECS.get(cat, CRIME_ICON_DEFAULT)
+        for cat in area_crime_data["categories"]
+    }
     payload = {**area_crime_data, "icon_specs": icon_specs}
     payload_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
 
-    html_doc = f"""<!DOCTYPE html>
+    html_doc = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Detroit Crime — Area + Crime Type Map Builder</title>
+<title>Detroit Crime Analysis — Custom Map Builder</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.3/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 <style>
- :root{{--ink:#0f172a;--muted:#64748b;--line:#dbe3ef;--blue:#0b5cab;--soft:#f5f7fb;}}
- *{{box-sizing:border-box}} body{{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--soft);color:var(--ink)}}
- .wrap{{max-width:1320px;margin:0 auto;padding:20px 20px 40px}}
- h1{{margin:4px 0;font-size:1.6rem}} .note{{color:var(--muted);font-size:.86rem;line-height:1.4}}
- .panel{{background:#eef5ff;border:1px solid #bfdbfe;border-radius:12px;padding:14px;margin:14px 0;display:flex;gap:14px;align-items:end;flex-wrap:wrap}}
- select,button{{padding:9px 11px;border:1px solid #93a4b8;border-radius:8px;background:#fff;font-weight:700;font-size:.92rem}}
- button{{cursor:pointer;background:var(--blue);color:#fff;border-color:var(--blue)}}
- button.secondary{{background:#fff;color:var(--ink);border-color:#93a4b8}}
- #map{{height:640px;border-radius:12px;border:1px solid var(--line)}}
- .layers{{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}}
- .chip{{display:flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--line);border-radius:999px;padding:5px 6px 5px 11px;font-size:.82rem;font-weight:700}}
- .chip button{{padding:2px 8px;border-radius:999px;font-size:.78rem;background:#fee2e2;color:#991b1b;border-color:#fecaca}}
- .status{{font-size:.86rem;color:var(--muted);margin-top:4px}}
+:root{--navy:#0b2d50;--blue:#0b5cab;--blue2:#1477c9;--ink:#0f172a;--muted:#64748b;--line:#dbe3ef;--soft:#f4f7fb;--card:#fff}
+*{box-sizing:border-box} body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;background:var(--soft);color:var(--ink)}
+.topbar{height:62px;background:linear-gradient(90deg,#082b4f,#0b3c6d);color:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 22px;box-shadow:0 2px 8px rgba(15,23,42,.2)}
+.brand{display:flex;align-items:center;gap:11px;font-weight:900}.brand-badge{width:35px;height:35px;border-radius:9px;background:rgba(255,255,255,.14);display:flex;align-items:center;justify-content:center;font-size:19px}
+.top-actions{display:flex;gap:9px;align-items:center}.top-actions a{color:#fff;text-decoration:none;font-weight:760;font-size:.86rem;padding:8px 10px;border-radius:7px}.top-actions a:hover{background:rgba(255,255,255,.1)}
+.workspace{display:grid;grid-template-columns:360px 1fr;min-height:calc(100vh - 62px)}
+.sidebar{background:#fff;border-right:1px solid var(--line);padding:18px 16px;overflow:auto;max-height:calc(100vh - 62px)}
+.main{padding:16px;min-width:0}
+.section-title{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:var(--blue);font-weight:900;margin-bottom:8px}
+.scope{display:inline-flex;align-items:center;gap:7px;padding:7px 10px;background:#e8f2ff;color:#16477a;border:1px solid #bfdbfe;border-radius:999px;font-weight:900;font-size:.82rem;margin-bottom:14px}
+.field{margin-bottom:11px}.field label{display:block;font-size:.77rem;font-weight:820;color:#334155;margin-bottom:5px}
+select,input,button{font:inherit} select,input[type=date]{width:100%;padding:9px 10px;border:1px solid #aebdce;border-radius:8px;background:#fff;font-weight:700;color:#172033}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mode-row{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.mode-btn{border:1px solid #aebdce;border-radius:8px;background:#fff;padding:9px 5px;font-weight:800;font-size:.76rem;cursor:pointer;color:#334155}.mode-btn.active{background:#e8f2ff;color:#0b5cab;border-color:#7fb0df}
+.primary{width:100%;background:var(--blue);color:#fff;border:0;border-radius:8px;padding:11px 12px;font-weight:900;cursor:pointer;margin-top:3px}.secondary{width:100%;background:#fff;color:#334155;border:1px solid #aebdce;border-radius:8px;padding:10px 12px;font-weight:850;cursor:pointer;margin-top:7px}
+.panel{border:1px solid var(--line);border-radius:11px;background:#fff;padding:12px;margin-top:14px}.panel h3{font-size:.9rem;margin:0 0 8px}.status{font-size:.8rem;color:var(--muted);line-height:1.45}
+.layer-list{display:flex;flex-direction:column;gap:7px}.layer-card{border:1px solid #e2e8f0;border-radius:9px;padding:9px;background:#fafcff}.layer-top{display:flex;align-items:center;gap:8px}.layer-name{flex:1;font-size:.78rem;font-weight:850}.layer-actions{display:flex;gap:5px;margin-top:7px}.layer-actions button{border:1px solid #cbd5e1;background:#fff;border-radius:6px;padding:5px 7px;font-size:.7rem;font-weight:800;cursor:pointer}.layer-actions .remove{color:#991b1b;background:#fff5f5;border-color:#fecaca}
+.icon-preview{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+.map-shell{position:relative} #map{height:calc(100vh - 118px);min-height:650px;border:1px solid var(--line);border-radius:13px;box-shadow:0 3px 12px rgba(15,23,42,.08)}
+.map-tools{position:absolute;z-index:600;right:12px;top:12px;background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px;box-shadow:0 2px 8px rgba(15,23,42,.15);display:flex;gap:6px}.map-tools button{background:#fff;border:1px solid #d3dce7;border-radius:6px;padding:6px 8px;font-size:.72rem;font-weight:800;cursor:pointer}
+.legend{position:absolute;z-index:600;right:12px;bottom:12px;max-width:280px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:10px;box-shadow:0 2px 8px rgba(15,23,42,.15);font-size:.77rem}.legend-items{display:flex;flex-direction:column;gap:5px;margin-top:7px}.legend-item{display:flex;align-items:center;gap:7px}
+.marker-wrap{background:transparent!important;border:0!important}.marker-symbol{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:16px;border:2px solid #fff;box-shadow:0 1px 5px rgba(0,0,0,.55);position:relative}.marker-count{position:absolute;right:-8px;top:-9px;min-width:18px;height:18px;border-radius:999px;background:#fff;color:#0f172a;border:2px solid currentColor;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:900;padding:0 3px}
+.modal-backdrop{display:none;position:fixed;z-index:3000;inset:0;background:rgba(15,23,42,.44);align-items:center;justify-content:center;padding:18px}.modal-backdrop.open{display:flex}.modal{background:#fff;width:min(920px,96vw);max-height:88vh;overflow:auto;border-radius:15px;border:1px solid #d7e0ea;box-shadow:0 24px 70px rgba(15,23,42,.3);padding:18px}
+.modal-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}.modal-head h2{font-size:1.18rem;margin:0}.close-btn{border:0;background:#f1f5f9;border-radius:7px;padding:6px 9px;cursor:pointer;font-weight:900}
+.custom-grid{display:grid;grid-template-columns:1fr 250px;gap:16px;margin-top:14px}.icon-library{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}.icon-choice{height:48px;border:1px solid #d8e0ea;border-radius:9px;background:#fff;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer}.icon-choice.selected{border:2px solid var(--blue);background:#eef6ff}
+.color-grid{display:grid;grid-template-columns:repeat(6,34px);gap:8px;margin-top:8px}.color-choice{width:34px;height:34px;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 1px #cbd5e1;cursor:pointer}.color-choice.selected{box-shadow:0 0 0 3px #0b5cab}
+.custom-preview{border:1px solid #e2e8f0;border-radius:12px;padding:15px;background:#fafcff;text-align:center}.big-preview{width:64px;height:64px;border-radius:50%;margin:8px auto 15px;display:flex;align-items:center;justify-content:center;color:#fff;font-size:30px;border:3px solid #fff;box-shadow:0 2px 10px rgba(15,23,42,.25)}
+.apply-style{width:100%;background:var(--blue);color:#fff;border:0;border-radius:8px;padding:10px;font-weight:900;cursor:pointer;margin-top:12px}
+@media(max-width:980px){.workspace{grid-template-columns:1fr}.sidebar{max-height:none;border-right:0;border-bottom:1px solid var(--line)}#map{height:650px}.custom-grid{grid-template-columns:1fr}.icon-library{grid-template-columns:repeat(6,1fr)}} 
+@media(max-width:560px){.top-actions{display:none}.workspace{display:block}.main{padding:8px}.grid2{grid-template-columns:1fr}.icon-library{grid-template-columns:repeat(5,1fr)}#map{height:560px;min-height:560px}}
 </style>
 </head>
 <body>
-<div class="wrap">
- <h1>Area + Crime Type Map Builder</h1>
- <p class="note">Choose a neighborhood to draw its approximate outline (a shape built from that neighborhood's own incident locations — not an official city boundary), then add one or more crime types to place icon markers for incidents of that type inside the area. Add as many crime types as you like; each gets its own removable layer. Reset clears everything so you can start again.</p>
- <div class="panel">
-  <div><div style="font-weight:800;margin-bottom:6px;">Neighborhood / area</div>
-   <select id="areaSelect"><option value="">Select a neighborhood…</option></select>
-  </div>
-  <div><div style="font-weight:800;margin-bottom:6px;">Crime type</div>
-   <select id="crimeSelect"><option value="">Select a crime type…</option></select>
-  </div>
-  <div><button id="addBtn" type="button">Add crime type to map</button></div>
-  <div><button id="resetBtn" type="button" class="secondary">Reset</button></div>
- </div>
- <div class="layers" id="layerChips"></div>
- <div class="status" id="status"></div>
- <div id="map"></div>
+<div class="topbar">
+ <div class="brand"><div class="brand-badge">🛡</div><div>Detroit Crime Analysis <span style="font-weight:500;opacity:.78">/ Custom Map Builder</span></div></div>
+ <div class="top-actions"><a href="../index.html">← Dashboard</a><a href="#" id="fitTop">Fit Precinct</a></div>
 </div>
+
+<div class="workspace">
+ <aside class="sidebar">
+  <div class="section-title">Build Your Map</div>
+  <div class="scope" id="precinctScope">Precinct not selected</div>
+
+  <div class="field"><label>Neighborhood (optional)</label><select id="areaSelect"><option value="">All neighborhoods in selected precinct</option></select></div>
+  <div class="grid2">
+   <div class="field"><label>Start date</label><input type="date" id="startDate"></div>
+   <div class="field"><label>End date</label><input type="date" id="endDate"></div>
+  </div>
+  <div class="field"><label>Crime type</label><select id="crimeSelect"><option value="">Select a crime type…</option></select></div>
+  <div class="field"><label>Crime description (optional)</label><select id="descriptionSelect" disabled><option value="">Select a crime type first…</option></select></div>
+
+  <div class="field"><label>Visualization style</label>
+   <div class="mode-row">
+    <button type="button" class="mode-btn active" data-mode="markers">Markers</button>
+    <button type="button" class="mode-btn" data-mode="clusters">Clusters</button>
+    <button type="button" class="mode-btn" data-mode="heatmap">Heat map</button>
+   </div>
+  </div>
+
+  <button class="primary" id="addBtn">＋ Add layer to map</button>
+  <button class="secondary" id="resetBtn">Reset all layers</button>
+
+  <div class="panel"><h3>Status</h3><div class="status" id="status">Choose a precinct from the dashboard to begin.</div></div>
+  <div class="panel"><h3>Visible Layers</h3><div class="layer-list" id="layerList"><div class="status">No layers added yet.</div></div></div>
+ </aside>
+
+ <main class="main">
+  <div class="map-shell">
+   <div class="map-tools"><button id="fitBtn">Fit scope</button><button id="clearOutlineBtn">Hide outline</button></div>
+   <div id="map"></div>
+   <div class="legend"><b>Legend</b><div class="legend-items" id="legendItems"><span class="status">Add a crime layer to populate the legend.</span></div></div>
+  </div>
+ </main>
+</div>
+
+<div class="modal-backdrop" id="styleModal">
+ <div class="modal">
+  <div class="modal-head"><div><div class="section-title">Layer Styling</div><h2 id="styleTitle">Customize crime layer</h2><div class="status">Choose an icon and color for this crime layer.</div></div><button class="close-btn" id="closeStyle">✕</button></div>
+  <div class="custom-grid">
+   <div>
+    <div style="font-weight:850;margin-bottom:8px;">Icon library</div>
+    <div class="icon-library" id="iconLibrary"></div>
+   </div>
+   <div class="custom-preview">
+    <div style="font-weight:850">Preview</div>
+    <div class="big-preview" id="bigPreview">●</div>
+    <div style="font-weight:850;margin-top:4px;">Color</div>
+    <div class="color-grid" id="colorGrid"></div>
+    <button class="apply-style" id="applyStyleBtn">Apply style</button>
+   </div>
+  </div>
+ </div>
+</div>
+
 <script>
-const DATA={payload_json};
-const neighborhoods=DATA.neighborhoods, categories=DATA.categories, boundaries=DATA.boundaries, points=DATA.points, iconSpecs=DATA.icon_specs;
+const DATA=__PAYLOAD__;
+const precincts=DATA.precincts||[], neighborhoods=DATA.neighborhoods||[], neighborhoodsByPrecinct=DATA.neighborhoods_by_precinct||{};
+const categories=DATA.categories||[], descriptions=DATA.descriptions||[], descriptionsByCategory=DATA.descriptions_by_category||{};
+const locations=DATA.locations||[], incidentDates=DATA.incident_dates||[], incidentTimes=DATA.incident_times||[];
+const neighborhoodBoundaries=DATA.neighborhood_boundaries||{}, precinctBoundaries=DATA.precinct_boundaries||{}, points=DATA.points||[];
+const iconSpecs=DATA.icon_specs||{}, baseDate=DATA.base_date?new Date(DATA.base_date+'T00:00:00Z'):null;
 
-const areaSelect=document.getElementById('areaSelect');
-const crimeSelect=document.getElementById('crimeSelect');
-const statusEl=document.getElementById('status');
-const layerChips=document.getElementById('layerChips');
+const ICON_LIBRARY=['🚗','🏠','💰','🎒','📦','⚠️','🛡️','🚨','🎯','✹','◆','●','▲','■','★','✚','✕','🔔','👁️','📍','🔑','🚪','🔒','💥','🔥','🧰','🧱','🧾','💳','🔎','⚡','⬢','⬟','◉','◎'];
+const COLORS=['#b91c1c','#dc2626','#ea580c','#f59e0b','#65a30d','#15803d','#0f766e','#0891b2','#2563eb','#1d4ed8','#4f46e5','#7c3aed','#9333ea','#c026d3','#db2777','#475569','#111827','#6b7280'];
 
-neighborhoods.forEach(n=>{{const o=document.createElement('option');o.value=n;o.textContent=n+(boundaries[n]?'':' (outline unavailable)');areaSelect.appendChild(o);}});
-categories.forEach(c=>{{const o=document.createElement('option');o.value=c;o.textContent=c;crimeSelect.appendChild(o);}});
+const areaSelect=document.getElementById('areaSelect'),crimeSelect=document.getElementById('crimeSelect'),descriptionSelect=document.getElementById('descriptionSelect');
+const startDate=document.getElementById('startDate'),endDate=document.getElementById('endDate'),statusEl=document.getElementById('status'),layerList=document.getElementById('layerList'),legendItems=document.getElementById('legendItems');
+const precinctScope=document.getElementById('precinctScope');
+let selectedMode='markers', precinctOutline=null, areaOutline=null, showOutline=true, editingKey=null, draftIcon='●', draftColor='#0b5cab';
+const crimeLayers={};
 
+startDate.min=DATA.min_date||'';startDate.max=DATA.max_date||'';endDate.min=DATA.min_date||'';endDate.max=DATA.max_date||'';endDate.value=DATA.max_date||'';
+if(DATA.max_date){const d=new Date(DATA.max_date+'T00:00:00Z');d.setUTCDate(d.getUTCDate()-13);startDate.value=d.toISOString().slice(0,10);}
+categories.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;crimeSelect.appendChild(o);});
+
+function populateDescriptions(category){
+ descriptionSelect.innerHTML='';
+ if(!category){descriptionSelect.disabled=true;descriptionSelect.innerHTML='<option value="">Select a crime type first…</option>';return;}
+ descriptionSelect.disabled=false;const all=document.createElement('option');all.value='';all.textContent='All '+category+' descriptions';descriptionSelect.appendChild(all);
+ (descriptionsByCategory[category]||[]).forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=d;descriptionSelect.appendChild(o);});
+}
+crimeSelect.addEventListener('change',()=>populateDescriptions(crimeSelect.value));
+
+const qs=new URLSearchParams(window.location.search),selectedPrecinct=(qs.get('precinct')||'').trim().toUpperCase(),precinctIndex=precincts.indexOf(selectedPrecinct);
 const map=L.map('map').setView([42.3468,-83.0700],11);
-L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_all/{{z}}/{{x}}/{{y}}{{r}}.png',{{maxZoom:19,attribution:'&copy; OpenStreetMap &copy; CARTO'}}).addTo(map);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
 
-let areaOutline=null;
-let selectedArea=null;
-const crimeLayers={{}};
+function dateOffset(s){if(!baseDate||!s)return null;const d=new Date(s+'T00:00:00Z');return Math.round((d-baseDate)/86400000);}
+function populateNeighborhoods(){areaSelect.innerHTML='<option value="">All neighborhoods in Precinct '+selectedPrecinct+'</option>';(neighborhoodsByPrecinct[selectedPrecinct]||[]).forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=n;areaSelect.appendChild(o);});}
+function clearAreaOutline(){if(areaOutline){map.removeLayer(areaOutline);areaOutline=null;}}
+function clearPrecinctOutline(){if(precinctOutline){map.removeLayer(precinctOutline);precinctOutline=null;}}
+function drawPrecinct(){clearPrecinctOutline();const ring=precinctBoundaries[selectedPrecinct];if(!ring)return;precinctOutline=L.polygon(ring,{color:'#1e3a8a',weight:3,dashArray:'8 5',fillColor:'#3b82f6',fillOpacity:.035}).addTo(map);map.fitBounds(precinctOutline.getBounds(),{padding:[24,24]});}
+function drawArea(name){clearAreaOutline();const ring=neighborhoodBoundaries[name];if(!ring)return;areaOutline=L.polygon(ring,{color:'#0b5cab',weight:2,fillColor:'#60a5fa',fillOpacity:.08}).addTo(map);map.fitBounds(areaOutline.getBounds(),{padding:[24,24]});}
+areaSelect.addEventListener('change',()=>{if(areaSelect.value)drawArea(areaSelect.value);else{clearAreaOutline();if(precinctOutline)map.fitBounds(precinctOutline.getBounds(),{padding:[24,24]});}});
 
-function clearAreaOutline(){{if(areaOutline){{map.removeLayer(areaOutline);areaOutline=null;}}}}
+document.querySelectorAll('.mode-btn').forEach(b=>b.addEventListener('click',()=>{{
+ document.querySelectorAll('.mode-btn').forEach(x=>x.classList.remove('active'));
+ b.classList.add('active');
+ selectedMode=b.dataset.mode;
+ const label=selectedMode==='heatmap'?'Heat map':selectedMode==='clusters'?'Clusters':'Markers';
+ statusEl.textContent=label+' selected for the next layer. You can also change the display style of any existing layer below.';
+}}));
 
-function drawArea(name){{
- clearAreaOutline();
- selectedArea=name;
- const ring=boundaries[name];
- if(!ring){{statusEl.textContent=name+': no outline available (too few mapped incidents). You can still add crime-type layers below.';return;}}
- const latlngs=ring.map(p=>[p[0],p[1]]);
- areaOutline=L.polygon(latlngs,{{color:'#0b5cab',weight:2,fillColor:'#0b5cab',fillOpacity:0.08}}).addTo(map);
- map.fitBounds(areaOutline.getBounds(),{{padding:[24,24]}});
- statusEl.textContent='Showing approximate outline for '+name+'. Add a crime type to place icons inside this area.';
-}}
+function styleFor(category){return iconSpecs[category]||{symbol:'●',color:'#334155'};}
+function markerIcon(symbol,color,count){const badge=count>1?'<span class="marker-count" style="color:'+color+'">'+count+'</span>':'';return L.divIcon({className:'marker-wrap',html:'<div class="marker-symbol" style="background:'+color+'"><span>'+symbol+'</span>'+badge+'</div>',iconSize:[32,32],iconAnchor:[16,16]});}
 
-function iconFor(category){{
- const spec=iconSpecs[category]||{{symbol:'\u25cf',color:'#334155'}};
- return L.divIcon({{
-  className:'crime-marker',
-  html:'<div style="background:'+spec.color+';color:#fff;border-radius:50%;width:22px;height:22px;display:flex;align-items:center;justify-content:center;font-size:12px;box-shadow:0 1px 3px rgba(0,0,0,.4);">'+spec.symbol+'</div>',
-  iconSize:[22,22],
-  iconAnchor:[11,11],
- }});
-}}
+function matchingPoints(area,category,description,startStr,endStr){
+ const s=dateOffset(startStr),e=dateOffset(endStr),areaIdx=area?neighborhoods.indexOf(area):-1,catIdx=categories.indexOf(category),descIdx=description?descriptions.indexOf(description):-1;
+ return points.filter(p=>p[2]===precinctIndex&&p[4]===catIdx&&(areaIdx===-1||p[3]===areaIdx)&&(descIdx===-1||p[5]===descIdx)&&p[6]>=s&&p[6]<=e);
+}
 
-function addCrimeLayer(area,category){{
- const key=area+'||'+category;
- if(crimeLayers[key]){{statusEl.textContent=category+' is already shown for '+area+'.';return;}}
- const areaIdx=neighborhoods.indexOf(area);
- const catIdx=categories.indexOf(category);
- if(areaIdx===-1||catIdx===-1)return;
- const icon=iconFor(category);
- const group=L.layerGroup();
- let count=0;
- for(let i=0;i<points.length;i++){{
-  const p=points[i];
-  if(p[2]!==areaIdx||p[3]!==catIdx)continue;
-  L.marker([p[0],p[1]],{{icon:icon}}).addTo(group);
-  count++;
- }}
- group.addTo(map);
- crimeLayers[key]={{group:group,area:area,category:category,count:count}};
- renderChips();
- statusEl.textContent=count?('Added '+count+' '+category+' incident'+(count===1?'':'s')+' in '+area+'.'):('No '+category+' incidents recorded in '+area+'.');
-}}
+function popupHtml(rows,category,scopeLabel){
+ const first=rows[0],location=locations[first[7]]||'Location unavailable';
+ const items=rows.slice(0,12).map(p=>'<div style="margin:6px 0;padding-top:5px;border-top:1px solid #e5e7eb"><b>'+(incidentDates[p[8]]||'Date unavailable')+' · '+(incidentTimes[p[9]]||'Time unavailable')+'</b><br>'+(descriptions[p[5]]||'Description unavailable')+'</div>').join('');
+ const more=rows.length>12?'<div style="margin-top:6px;color:#64748b">+'+(rows.length-12)+' more matching incidents</div>':'';
+ return '<div style="min-width:240px"><b style="font-size:1.05rem">'+category+'</b><div style="margin-top:6px"><b>Location:</b> '+location+'</div><div><b>Neighborhood:</b> '+neighborhoods[first[3]]+'</div><div><b>Matching incidents here:</b> '+rows.length+'</div><div><b>Layer scope:</b> '+scopeLabel+'</div><div style="margin-top:8px;font-weight:850">Incident date / time</div>'+items+more+'</div>';
+}
 
-function removeCrimeLayer(key){{
- const entry=crimeLayers[key];
- if(!entry)return;
- map.removeLayer(entry.group);
- delete crimeLayers[key];
- renderChips();
-}}
+function buildLayer(entry){
+ const selected=matchingPoints(entry.area,entry.category,entry.description,entry.startStr,entry.endStr);
+ if(!selected.length)return null;
 
-function renderChips(){{
- layerChips.innerHTML='';
- Object.keys(crimeLayers).forEach(key=>{{
-  const entry=crimeLayers[key];
-  const chip=document.createElement('div');
-  chip.className='chip';
-  const spec=iconSpecs[entry.category]||{{color:'#334155'}};
-  chip.innerHTML='<span style="color:'+spec.color+'">\u25cf</span> '+entry.category+' — '+entry.area+' ('+entry.count+')';
-  const btn=document.createElement('button');
-  btn.type='button';btn.textContent='Remove';
-  btn.addEventListener('click',()=>removeCrimeLayer(key));
-  chip.appendChild(btn);
-  layerChips.appendChild(chip);
- }});
-}}
+ let group;
 
-areaSelect.addEventListener('change',()=>{{
- const name=areaSelect.value;
- if(!name){{clearAreaOutline();selectedArea=null;statusEl.textContent='';return;}}
- drawArea(name);
-}});
+ if(entry.mode==='heatmap'){
+  if(typeof L.heatLayer==='function'){
+   group=L.heatLayer(selected.map(p=>[p[0],p[1],1]),{radius:26,blur:20,maxZoom:17,minOpacity:.32});
+   group.addTo(map);
+  }else{
+   // Safe fallback if the heat plugin fails to load: show translucent density circles.
+   group=L.layerGroup();
+   selected.forEach(p=>L.circleMarker([p[0],p[1]],{
+    radius:11,stroke:false,fillColor:entry.color,fillOpacity:.18
+   }).addTo(group));
+   group.addTo(map);
+   statusEl.textContent='Heat-map plugin was unavailable, so a density-circle fallback is being shown.';
+  }
+ }else{
+  const canCluster=entry.mode==='clusters'&&typeof L.markerClusterGroup==='function';
+  group=canCluster
+    ?L.markerClusterGroup({showCoverageOnHover:false,spiderfyOnMaxZoom:true,maxClusterRadius:48})
+    :L.layerGroup();
 
-document.getElementById('addBtn').addEventListener('click',()=>{{
- const area=areaSelect.value, category=crimeSelect.value;
- if(!area){{statusEl.textContent='Choose a neighborhood first.';return;}}
- if(!category){{statusEl.textContent='Choose a crime type to add.';return;}}
- addCrimeLayer(area,category);
-}});
+  const byLoc={};
+  selected.forEach(p=>{
+   const loc=locations[p[7]]||'';
+   const k=loc+'||'+p[0].toFixed(5)+'||'+p[1].toFixed(5);
+   (byLoc[k]||(byLoc[k]=[])).push(p);
+  });
 
-document.getElementById('resetBtn').addEventListener('click',()=>{{
- Object.keys(crimeLayers).forEach(key=>map.removeLayer(crimeLayers[key].group));
- for(const key in crimeLayers)delete crimeLayers[key];
- renderChips();
- clearAreaOutline();
- areaSelect.value='';
- crimeSelect.value='';
- selectedArea=null;
- statusEl.textContent='Reset. Choose a neighborhood to begin again.';
-}});
+  Object.values(byLoc).forEach(rows=>{
+   rows.sort((a,b)=>String(incidentDates[a[8]]||'').localeCompare(String(incidentDates[b[8]]||'')));
+   const f=rows[0];
+   L.marker([f[0],f[1]],{icon:markerIcon(entry.icon,entry.color,rows.length)})
+    .bindPopup(popupHtml(rows,entry.category,entry.scopeLabel),{maxWidth:370})
+    .addTo(group);
+  });
+  group.addTo(map);
+
+  if(entry.mode==='clusters'&&!canCluster){
+   statusEl.textContent='Cluster plugin was unavailable, so standard location markers are being shown.';
+  }
+ }
+
+ entry.group=group;
+ entry.count=selected.length;
+ return entry;
+}
+
+function addLayer(){
+ const area=areaSelect.value,category=crimeSelect.value,description=descriptionSelect.value,startStr=startDate.value,endStr=endDate.value;
+ if(precinctIndex<0){statusEl.textContent='Return to the dashboard and choose a precinct first.';return;}
+ if(!category||!startStr||!endStr){statusEl.textContent='Choose dates and a crime type.';return;} if(startStr>endStr){statusEl.textContent='Start date must be on or before end date.';return;}
+ const pts=matchingPoints(area,category,description,startStr,endStr); if(!pts.length){statusEl.textContent='No matching '+category+' incidents were found. No empty layer was added.';return;}
+ const spec=styleFor(category),scopeLabel=area||('Precinct '+selectedPrecinct),key=[selectedPrecinct,area||'ALL',startStr,endStr,category,description||'ALL',selectedMode,Date.now()].join('||');
+ const entry={key,area,category,description,descLabel:description||('All '+category+' descriptions'),startStr,endStr,mode:selectedMode,modeLabel:selectedMode==='heatmap'?'Heat map':selectedMode==='clusters'?'Clusters':'Markers',scopeLabel,icon:spec.symbol||'●',color:spec.color||'#0b5cab',group:null,count:0};
+ const built=buildLayer(entry);
+ if(!built){statusEl.textContent='The layer could not be built for this selection.';return;}
+ crimeLayers[key]=built;
+ statusEl.textContent='Added '+entry.category+' — '+entry.scopeLabel+' — '+entry.modeLabel+'. You can switch this layer between Markers, Clusters, and Heat below.';
+ renderLayers();renderLegend();
+}
+document.getElementById('addBtn').addEventListener('click',addLayer);
+
+function removeLayer(key){const e=crimeLayers[key];if(!e)return;if(e.group)map.removeLayer(e.group);delete crimeLayers[key];renderLayers();renderLegend();}
+function toggleLayer(key){const e=crimeLayers[key];if(!e)return;if(map.hasLayer(e.group))map.removeLayer(e.group);else e.group.addTo(map);renderLayers();}
+function rebuildLayer(key){
+ const e=crimeLayers[key];if(!e)return;
+ if(e.group&&map.hasLayer(e.group))map.removeLayer(e.group);
+ buildLayer(e);renderLayers();renderLegend();
+}
+function setLayerMode(key,mode){
+ const e=crimeLayers[key];if(!e)return;
+ e.mode=mode;
+ e.modeLabel=mode==='heatmap'?'Heat map':mode==='clusters'?'Clusters':'Markers';
+ rebuildLayer(key);
+ statusEl.textContent=e.category+' is now displayed as '+e.modeLabel+'.';
+}
+
+function renderLayers(){
+ const keys=Object.keys(crimeLayers);if(!keys.length){layerList.innerHTML='<div class="status">No layers added yet.</div>';return;}
+ layerList.innerHTML='';keys.forEach(key=>{const e=crimeLayers[key],card=document.createElement('div');card.className='layer-card';
+  card.innerHTML='<div class="layer-top"><div class="icon-preview" style="background:'+e.color+'">'+e.icon+'</div><div class="layer-name">'+e.category+'<div class="status">'+e.scopeLabel+' · '+e.modeLabel+' · '+e.count+'</div></div></div>';
+  const actions=document.createElement('div');actions.className='layer-actions';
+  const toggle=document.createElement('button');toggle.type='button';toggle.textContent=map.hasLayer(e.group)?'Hide':'Show';toggle.onclick=()=>toggleLayer(key);
+  const markers=document.createElement('button');markers.type='button';markers.textContent='Markers';markers.onclick=()=>setLayerMode(key,'markers');
+  const clusters=document.createElement('button');clusters.type='button';clusters.textContent='Clusters';clusters.onclick=()=>setLayerMode(key,'clusters');
+  const heat=document.createElement('button');heat.type='button';heat.textContent='Heat';heat.onclick=()=>setLayerMode(key,'heatmap');
+  const style=document.createElement('button');style.type='button';style.textContent='Customize';style.onclick=()=>openStyle(key);
+  const rm=document.createElement('button');rm.type='button';rm.className='remove';rm.textContent='Remove';rm.onclick=()=>removeLayer(key);
+  actions.append(toggle,markers,clusters,heat,style,rm);card.appendChild(actions);layerList.appendChild(card);
+ });
+}
+function renderLegend(){const vals=Object.values(crimeLayers);if(!vals.length){legendItems.innerHTML='<span class="status">Add a crime layer to populate the legend.</span>';return;}legendItems.innerHTML=vals.map(e=>'<div class="legend-item"><span class="icon-preview" style="width:23px;height:23px;background:'+e.color+'">'+e.icon+'</span><span>'+e.category+' · '+e.scopeLabel+'</span></div>').join('');}
+
+const modal=document.getElementById('styleModal'),iconLibrary=document.getElementById('iconLibrary'),colorGrid=document.getElementById('colorGrid'),bigPreview=document.getElementById('bigPreview');
+function renderStyleChoices(){
+ iconLibrary.innerHTML=ICON_LIBRARY.map(i=>'<button class="icon-choice'+(i===draftIcon?' selected':'')+'" data-icon="'+i+'">'+i+'</button>').join('');
+ colorGrid.innerHTML=COLORS.map(c=>'<button class="color-choice'+(c===draftColor?' selected':'')+'" data-color="'+c+'" style="background:'+c+'"></button>').join('');
+ bigPreview.textContent=draftIcon;bigPreview.style.background=draftColor;
+ iconLibrary.querySelectorAll('[data-icon]').forEach(b=>b.onclick=()=>{draftIcon=b.dataset.icon;renderStyleChoices();});
+ colorGrid.querySelectorAll('[data-color]').forEach(b=>b.onclick=()=>{draftColor=b.dataset.color;renderStyleChoices();});
+}
+function openStyle(key){const e=crimeLayers[key];if(!e)return;editingKey=key;draftIcon=e.icon;draftColor=e.color;document.getElementById('styleTitle').textContent='Customize '+e.category;renderStyleChoices();modal.classList.add('open');}
+function closeStyle(){modal.classList.remove('open');editingKey=null;}
+document.getElementById('closeStyle').onclick=closeStyle;modal.addEventListener('click',e=>{if(e.target===modal)closeStyle();});
+document.getElementById('applyStyleBtn').onclick=()=>{if(!editingKey)return;crimeLayers[editingKey].icon=draftIcon;crimeLayers[editingKey].color=draftColor;rebuildLayer(editingKey);closeStyle();};
+
+document.getElementById('resetBtn').onclick=()=>{Object.keys(crimeLayers).forEach(removeLayer);crimeSelect.value='';populateDescriptions('');areaSelect.value='';selectedMode='markers';document.querySelectorAll('.mode-btn').forEach(b=>b.classList.toggle('active',b.dataset.mode==='markers'));statusEl.textContent='All layers reset. Precinct '+selectedPrecinct+' remains selected.';if(precinctOutline)map.fitBounds(precinctOutline.getBounds(),{padding:[24,24]});};
+document.getElementById('fitBtn').onclick=()=>{if(areaOutline)map.fitBounds(areaOutline.getBounds(),{padding:[24,24]});else if(precinctOutline)map.fitBounds(precinctOutline.getBounds(),{padding:[24,24]});};
+document.getElementById('fitTop').onclick=e=>{e.preventDefault();document.getElementById('fitBtn').click();};
+document.getElementById('clearOutlineBtn').onclick=()=>{showOutline=!showOutline;if(!showOutline){clearAreaOutline();clearPrecinctOutline();document.getElementById('clearOutlineBtn').textContent='Show outline';}else{drawPrecinct();if(areaSelect.value)drawArea(areaSelect.value);document.getElementById('clearOutlineBtn').textContent='Hide outline';}};
+
+if(precinctIndex<0){precinctScope.textContent='No valid precinct selected';document.getElementById('addBtn').disabled=true;areaSelect.disabled=true;statusEl.textContent='Return to the main dashboard, select a precinct, then open Build Custom Crime Map.';}
+else{precinctScope.textContent='Precinct '+selectedPrecinct+' — fixed parent scope';populateNeighborhoods();drawPrecinct();statusEl.textContent='Precinct '+selectedPrecinct+' loaded. Start with the whole precinct or narrow to a neighborhood, then build as many crime layers as needed.';}
 </script>
 </body>
-</html>
-"""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+</html>"""
+    html_doc = html_doc.replace("__PAYLOAD__", payload_json)
     out_path.write_text(html_doc, encoding="utf-8")
-
 
 def generate_precinct_drilldown_assets(
     df: pd.DataFrame,
@@ -4264,7 +4572,6 @@ def generate_precinct_drilldown_assets(
 
     return manifest
 
-
 def save_operations_landing_html(
     df: pd.DataFrame,
     weekly: pd.DataFrame,
@@ -4321,29 +4628,32 @@ def save_operations_landing_html(
     current_max = temp.loc[temp["incident_year"] == int(current_year), "incident_date"].max()
     data_through = current_max.strftime("%Y-%m-%d") if pd.notna(current_max) else "Unknown"
 
-    improvement = precinct_improvement.copy() if precinct_improvement is not None else pd.DataFrame()
-    if not improvement.empty:
-        improvement["precinct_key"] = improvement["precinct_norm"].apply(norm_precinct)
+    # The operations landing page is a precinct-wide view. Upstream tables also
+    # contain neighborhood-specific records so the interactive drill-down can
+    # recalculate correctly when a neighborhood is selected. If those scoped
+    # rows are mixed into this page, one crime can appear multiple times for the
+    # same precinct (for example, several LARCENY rows from different
+    # neighborhoods). Keep only the independently calculated ALL-neighborhood
+    # records here; neighborhood-specific rows remain available to the detailed
+    # interactive dashboard.
+    def precinct_wide_only(frame: pd.DataFrame | None) -> pd.DataFrame:
+        if frame is None or frame.empty:
+            return pd.DataFrame()
 
-    recent = precinct_crime_14d.copy() if precinct_crime_14d is not None else pd.DataFrame()
-    if not recent.empty:
-        recent["precinct_key"] = recent["precinct_norm"].apply(norm_precinct)
+        out = frame.copy()
+        if "neighborhood_scope" in out.columns:
+            out = out[out["neighborhood_scope"].astype(str).eq("ALL")].copy()
 
-    trends = precinct_crime_trends.copy() if precinct_crime_trends is not None else pd.DataFrame()
-    if not trends.empty:
-        trends["precinct_key"] = trends["precinct_norm"].apply(norm_precinct)
+        if not out.empty and "precinct_norm" in out.columns:
+            out["precinct_key"] = out["precinct_norm"].apply(norm_precinct)
+        return out
 
-    priorities = priority_concerns.copy() if priority_concerns is not None else pd.DataFrame()
-    if not priorities.empty:
-        priorities["precinct_key"] = priorities["precinct_norm"].apply(norm_precinct)
-
-    timing = temporal_summary.copy() if temporal_summary is not None else pd.DataFrame()
-    if not timing.empty:
-        timing["precinct_key"] = timing["precinct_norm"].apply(norm_precinct)
-
-    hotspots = hotspot_change.copy() if hotspot_change is not None else pd.DataFrame()
-    if not hotspots.empty:
-        hotspots["precinct_key"] = hotspots["precinct_norm"].apply(norm_precinct)
+    improvement = precinct_wide_only(precinct_improvement)
+    recent = precinct_wide_only(precinct_crime_14d)
+    trends = precinct_wide_only(precinct_crime_trends)
+    priorities = precinct_wide_only(priority_concerns)
+    timing = precinct_wide_only(temporal_summary)
+    hotspots = precinct_wide_only(hotspot_change)
 
     focus = focus_locations.copy() if focus_locations is not None else pd.DataFrame()
     if not focus.empty:
@@ -4661,6 +4971,7 @@ def save_operations_landing_html(
         }
 
     daily_counts = build_daily_precinct_category_counts(temp, precincts)
+    hourly_counts = build_hourly_precinct_category_counts(temp, precincts)
 
     payload = {
         "city": city_data,
@@ -4668,6 +4979,7 @@ def save_operations_landing_html(
         "map_filename": map_filename,
         "area_map_filename": area_map_filename,
         "daily_counts": daily_counts,
+        "hourly_counts": hourly_counts,
     }
     payload_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     precinct_options = "".join(
@@ -4694,20 +5006,62 @@ h1{{margin:6px 0 4px;font-size:2.1rem}} h2{{margin:0 0 8px;font-size:1.4rem}} h3
 .brief{{padding:18px;margin-bottom:14px}} .section{{padding:17px;margin-top:14px}} .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}
 table{{width:100%;border-collapse:collapse}} th,td{{padding:7px 7px;border-bottom:1px solid #e7edf5;text-align:right;font-size:.84rem;vertical-align:top}}
 th{{color:#475569;font-size:.76rem}} th:first-child,td:first-child{{text-align:left}} tr:last-child td{{border-bottom:0}}
-.links{{display:flex;gap:8px 18px;flex-wrap:wrap;margin:10px 0 2px}} .links a{{color:var(--blue);font-weight:760;text-decoration:none}} .links a:hover{{text-decoration:underline}}
+.links{{display:flex;gap:8px 16px;flex-wrap:wrap;margin:10px 0 2px}} .links a{{color:var(--blue);font-weight:760;text-decoration:none}} .links a:hover{{text-decoration:underline}}
+.hero-row{{display:flex;justify-content:space-between;gap:16px;align-items:center;flex-wrap:wrap;margin:4px 0 14px}}
+.hero-actions{{display:flex;gap:9px;align-items:center;flex-wrap:wrap}}
+.primary-action{{display:inline-flex;align-items:center;justify-content:center;background:var(--blue);color:#fff!important;text-decoration:none!important;font-weight:850;padding:11px 16px;border-radius:9px;box-shadow:0 1px 2px rgba(15,23,42,.12)}}
+.primary-action:hover{{filter:brightness(.96)}}
+.secondary-action{{display:inline-flex;align-items:center;justify-content:center;border:1px solid #bfd0e5;background:#fff;color:var(--blue)!important;text-decoration:none!important;font-weight:780;padding:9px 13px;border-radius:8px}}
+.overview-grid{{display:grid;grid-template-columns:1.35fr .65fr;gap:14px;margin:14px 0}}
+.insight-card{{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:0 1px 2px rgba(15,23,42,.03)}}
+.insight-pair{{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}}
+.insight-stat{{background:#f8fafc;border:1px solid #e5ebf3;border-radius:9px;padding:11px}}
+.insight-stat .k{{font-size:.76rem;color:var(--muted);font-weight:760;text-transform:uppercase;letter-spacing:.03em}}
+.insight-stat .v{{font-size:1.02rem;font-weight:850;margin-top:4px}}
+.comparison-panel{{background:#f8fbff;border:1px solid #bfdbfe;border-radius:12px;padding:18px;margin:14px 0}}
+.comparison-title{{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}}
+.comparison-grid{{display:grid;grid-template-columns:repeat(4,minmax(145px,1fr));gap:10px;margin-top:12px}}
+.comparison-grid label{{display:block;font-size:.76rem;color:#475569;font-weight:780;margin-bottom:5px}}
+.comparison-grid input{{width:100%;padding:9px 10px;border:1px solid #a8b8ca;border-radius:8px;background:#fff}}
+.comparison-actions{{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}}
+.comparison-actions button{{border:0;border-radius:8px;padding:10px 13px;font-weight:800;cursor:pointer;background:var(--blue);color:#fff}}
+.comparison-actions button.secondary-btn{{background:#fff;color:var(--blue);border:1px solid #9eb3ca}}
+.detail-nav{{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:14px 0}}
+.detail-nav h3{{margin-bottom:4px}}
+.city-hero{{background:linear-gradient(115deg,#082f5f,#0b5cab 62%,#1477c9);color:#fff;border-radius:16px;padding:28px 30px;margin:18px 0 14px;box-shadow:0 8px 22px rgba(15,23,42,.12);position:relative;overflow:hidden}}
+.city-hero:after{{content:"";position:absolute;width:260px;height:260px;border:46px solid rgba(255,255,255,.06);border-radius:50%;right:-70px;top:-105px}}
+.city-hero .eyebrow{{color:#bfdbfe}} .city-hero h2{{font-size:2rem;margin:5px 0 6px}} .city-hero p{{max-width:760px;color:#e7f1ff;line-height:1.55;margin:0}}
+.city-kpis{{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:11px;margin:14px 0}}
+.city-grid{{display:grid;grid-template-columns:1.05fr .95fr;gap:14px;margin-top:14px}}
+.city-panel{{background:#fff;border:1px solid var(--line);border-radius:12px;padding:17px;box-shadow:0 1px 2px rgba(15,23,42,.03)}}
+.city-panel-head{{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px}}
+.precinct-glance{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}}
+.precinct-tile{{border:1px solid #dbe3ef;border-radius:11px;padding:13px;background:#fff;cursor:pointer;transition:.15s ease;min-height:142px}}
+.precinct-tile:hover{{transform:translateY(-2px);border-color:#8fb9e5;box-shadow:0 6px 15px rgba(15,23,42,.08)}}
+.precinct-tile .phead{{display:flex;justify-content:space-between;gap:8px;align-items:center}} .precinct-tile .pnum{{font-size:1.2rem;font-weight:900}}
+.precinct-tile .change{{font-weight:900}} .precinct-tile .mini{{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:11px}}
+.precinct-tile .mini div{{background:#f8fafc;border-radius:7px;padding:7px}} .precinct-tile .mini span{{display:block;color:var(--muted);font-size:.68rem;font-weight:760}}
+.precinct-tile .concern{{margin-top:9px;font-size:.78rem;color:#475569}} .precinct-tile .concern b{{color:var(--ink)}}
+.attention-row{{display:grid;grid-template-columns:34px 80px 1fr 90px;gap:8px;align-items:center;padding:9px 4px;border-bottom:1px solid #edf1f6;font-size:.82rem}}
+.attention-row:last-child{{border-bottom:0}} .attention-rank{{width:26px;height:26px;border-radius:50%;background:#fee2e2;color:#991b1b;display:flex;align-items:center;justify-content:center;font-weight:900}}
+.attention-change{{font-weight:900;text-align:right}} .city-crime-row{{display:grid;grid-template-columns:145px 1fr 62px;gap:9px;align-items:center;margin:9px 0;font-size:.8rem}}
+.city-bar{{height:8px;background:#e8eef6;border-radius:999px;overflow:hidden}} .city-bar i{{display:block;height:100%;background:#2f7ec5;border-radius:999px}}
+.city-actions{{display:flex;gap:9px;flex-wrap:wrap;margin-top:13px}}
+.city-map-callout{{background:#eef6ff;border:1px solid #bfdbfe;border-radius:11px;padding:14px;margin-top:12px}}
+#cityPrompt{{border:0;background:transparent;box-shadow:none;padding:0;margin:0}}
 .signal{{font-weight:800}} .high{{color:var(--red)}} .emerging{{color:var(--orange)}} .watch{{color:#a16207}} .improving{{color:var(--green)}}
 .badge{{display:inline-block;border-radius:999px;padding:4px 9px;font-size:.76rem;font-weight:800;background:#e2e8f0;color:#334155}}
 .metric-list{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}} .metric{{padding:10px;border:1px solid #e5e7eb;border-radius:8px;background:#fafafa}}
 .metric b{{display:block;font-size:1.05rem;margin-top:3px}} .driver-grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px}} .empty{{color:var(--muted);padding:8px 0}}
 #precinctOverview{{display:none}} .anchor-target{{scroll-margin-top:12px}}
-@media(max-width:980px){{.cards{{grid-template-columns:repeat(2,minmax(0,1fr))}}.grid2,.driver-grid{{grid-template-columns:1fr}}}}
-@media(max-width:560px){{.wrap{{padding:18px 12px 34px}}.cards{{grid-template-columns:1fr}}.metric-list{{grid-template-columns:1fr}}.selector select{{width:100%;min-width:0}}}}
+@media(max-width:980px){{.cards,.city-kpis{{grid-template-columns:repeat(2,minmax(0,1fr))}}.grid2,.driver-grid,.overview-grid,.city-grid{{grid-template-columns:1fr}}.comparison-grid{{grid-template-columns:repeat(2,minmax(0,1fr))}}.precinct-glance{{grid-template-columns:repeat(2,minmax(0,1fr))}}}}
+@media(max-width:560px){{.wrap{{padding:18px 12px 34px}}.cards,.city-kpis,.precinct-glance{{grid-template-columns:1fr}}.metric-list,.comparison-grid,.insight-pair{{grid-template-columns:1fr}}.selector select{{width:100%;min-width:0}}.primary-action,.secondary-action{{width:100%}}.city-hero{{padding:22px 18px}}.attention-row{{grid-template-columns:30px 70px 1fr 72px}}}}
 </style>
 </head>
 <body>
 <div class="wrap">
 <div class="eyebrow">Operational Control Center</div>
-<h1>Detroit Crime Operations</h1>
+<h1>Detroit Crime Operations Dashboard</h1>
 <p class="sub">Data coverage: {min_year} through {max_year}</p>
 <p class="note">Matched current-year comparisons use incidents through <b>{data_through}</b>. Select a precinct to evaluate only the workload and geography that precinct controls.</p>
 
@@ -4723,44 +5077,108 @@ th{{color:#475569;font-size:.76rem}} th:first-child,td:first-child{{text-align:l
 </div>
 
 <div id="cityPrompt" class="brief">
-<h2>Detroit Overview</h2>
-<p style="line-height:1.55;margin:0;">Citywide totals provide context only. Choose a precinct above to open its full operational evaluation: focus locations, deployment summary, matched-YTD improvement, dominant crime types, shift demand, decision-purpose workload, recent concerns, and precinct-only maps/charts.</p>
-<div class="links"><a href="../Images/{map_filename}?section=map" target="_blank">Open Detroit Interactive Map</a> <a href="../Images/{area_map_filename}" target="_blank">Build an Area + Crime Type Map</a></div>
+  <div class="city-hero">
+    <div class="eyebrow">Detroit Citywide Overview</div>
+    <h2>Crime operations at a glance</h2>
+    <p>Start citywide, compare recent activity across operational precincts, and identify where attention may be needed. Select any precinct card—or use the precinct selector above—to open the existing full Precinct Operations Evaluation.</p>
+  </div>
+
+  <div class="city-kpis" id="cityOverviewKpis"></div>
+
+  <div class="city-grid">
+    <div class="city-panel">
+      <div class="city-panel-head">
+        <div><div class="eyebrow">Precinct Comparison</div><h3 style="font-size:1.12rem;margin-top:4px;">Precincts requiring attention</h3></div>
+        <div class="note">Ranked by recent 14-day increase</div>
+      </div>
+      <div id="cityAttention"></div>
+    </div>
+
+    <div class="city-panel">
+      <div class="city-panel-head">
+        <div><div class="eyebrow">Citywide Crime Snapshot</div><h3 style="font-size:1.12rem;margin-top:4px;">Current 14 days by crime type</h3></div>
+        <div class="note">Largest current volumes</div>
+      </div>
+      <div id="cityCrimeSnapshot"></div>
+      <div class="city-map-callout">
+        <b>Need the citywide spatial view?</b>
+        <div class="note" style="margin-top:4px;">Open the existing Detroit interactive map. Custom layer building remains available from inside a selected precinct.</div>
+        <div class="city-actions"><a class="secondary-action" href="../Images/{map_filename}?section=map" target="_blank">Open Detroit Interactive Map</a></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="city-panel" style="margin-top:14px;">
+    <div class="city-panel-head">
+      <div><div class="eyebrow">Detroit Precincts at a Glance</div><h3 style="font-size:1.12rem;margin-top:4px;">Choose a precinct to investigate</h3></div>
+      <div class="note">Click a card to open its Operations Evaluation</div>
+    </div>
+    <div class="precinct-glance" id="cityPrecinctGlance"></div>
+  </div>
 </div>
 
 <div id="precinctOverview">
-  <div style="display:flex;justify-content:space-between;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:8px;">
-    <div><div class="eyebrow">Precinct Evaluation</div><h2 id="precinctTitle" style="font-size:1.7rem;margin-top:4px;"></h2><div id="precinctDate" class="sub"></div></div>
-    <span class="badge" id="trendBadge"></span>
-  </div>
-
-  <div class="brief">
-    <h3>Open precinct analysis</h3>
-    <div class="links" id="classicLinks"></div>
-    <div class="links" id="modernLinks" style="padding-top:4px;border-top:1px solid #eef2f7;"></div>
-  </div>
-
-  <div class="brief" id="rangeFilterBox">
-    <h3>Custom Date Range Filter</h3>
-    <div class="note">Pick your own "previous" and "current" windows to recompute recent activity, dominant crime types, priority/emerging concerns, and decision-purpose workload below for the selected precinct. Shift-level demand, recent timing, hotspot change, and focus locations require hour-of-day or geographic detail not shipped to the browser, so they continue to reflect the automated 28-day pipeline window.</div>
-    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;align-items:end;">
-      <div><label for="rangePrevStart">Previous range start</label><br><input type="date" id="rangePrevStart"></div>
-      <div><label for="rangePrevEnd">Previous range end</label><br><input type="date" id="rangePrevEnd"></div>
-      <div><label for="rangeCurrStart">Current range start</label><br><input type="date" id="rangeCurrStart"></div>
-      <div><label for="rangeCurrEnd">Current range end</label><br><input type="date" id="rangeCurrEnd"></div>
-      <div><button id="rangeApplyBtn" type="button">Apply custom range</button></div>
-      <div><button id="rangeResetBtn" type="button">Reset to automated 28-day window</button></div>
+  <div class="hero-row">
+    <div>
+      <div class="eyebrow">Precinct Evaluation</div>
+      <h2 id="precinctTitle" style="font-size:1.8rem;margin:4px 0 3px;"></h2>
+      <div id="precinctDate" class="sub"></div>
     </div>
-    <div class="note" id="rangeStatus" style="margin-top:6px;"></div>
+    <div class="hero-actions">
+      <span class="badge" id="trendBadge"></span>
+      <a id="buildMapBtn" class="primary-action" href="#" target="_blank">Build Custom Crime Map</a>
+    </div>
   </div>
 
   <div class="cards" id="precinctCards"></div>
 
-  <div class="brief"><h3>Overall Evaluation</h3><p id="precinctBrief" style="line-height:1.58;margin:0;"></p></div>
+  <div class="overview-grid">
+    <div class="insight-card">
+      <div class="eyebrow">Overall Evaluation</div>
+      <h3 style="font-size:1.12rem;margin-top:5px;">What changed?</h3>
+      <p id="precinctBrief" style="line-height:1.62;margin:7px 0 0;"></p>
+    </div>
+    <div class="insight-card">
+      <div class="eyebrow">Operational Snapshot</div>
+      <div class="insight-pair">
+        <div class="insight-stat"><div class="k">Leading concern</div><div class="v" id="topConcernQuick">—</div></div>
+        <div class="insight-stat"><div class="k">Peak timing</div><div class="v" id="timingQuick">—</div></div>
+      </div>
+      <div class="note" style="margin-top:10px;">Use the detailed sections below to investigate crime mix, workload, timing, focus locations, and hotspot change.</div>
+    </div>
+  </div>
+
+  <div class="comparison-panel" id="rangeFilterBox">
+    <div class="comparison-title">
+      <div>
+        <div class="eyebrow">Comparison Period</div>
+        <h3 style="font-size:1.12rem;margin-top:4px;">Automated 14-day comparison or custom dates</h3>
+      </div>
+      <div class="note" id="rangeStatus"></div>
+    </div>
+    <div class="note">By default, the dashboard compares the latest 14 days with the immediately preceding 14 days. A custom comparison recomputes recent activity, crime mix, priority concerns, decision-purpose workload, shift demand, and timing. Focus locations and hotspot change remain tied to the automated 14-day spatial pipeline.</div>
+    <div class="comparison-grid">
+      <div><label for="rangePrevStart">Previous start</label><input type="date" id="rangePrevStart"></div>
+      <div><label for="rangePrevEnd">Previous end</label><input type="date" id="rangePrevEnd"></div>
+      <div><label for="rangeCurrStart">Current start</label><input type="date" id="rangeCurrStart"></div>
+      <div><label for="rangeCurrEnd">Current end</label><input type="date" id="rangeCurrEnd"></div>
+    </div>
+    <div class="comparison-actions">
+      <button id="rangeApplyBtn" type="button">Apply comparison</button>
+      <button id="rangeResetBtn" type="button" class="secondary-btn">Reset to automated 14-day</button>
+    </div>
+  </div>
+
+  <div class="detail-nav">
+    <h3>Detailed analysis</h3>
+    <div class="note">Open a focused drill-down only when you need a separate analytical view.</div>
+    <div class="links" id="modernLinks"></div>
+    <div class="links" id="classicLinks" style="padding-top:5px;border-top:1px solid #eef2f7;"></div>
+  </div>
 
   <div class="section anchor-target" id="focusSection">
     <h2>Top 10 Operational Focus Locations</h2>
-    <div class="note">Highest-ranked focus cells inside the selected precinct only. Reflects the automated 28-day pipeline window; not affected by the custom date range filter.</div>
+    <div class="note">Highest-ranked focus cells inside the selected precinct only. Reflects the automated 14-day pipeline window; not affected by the custom date range filter.</div>
     <div id="focusLocations"></div>
   </div>
 
@@ -4791,13 +5209,13 @@ th{{color:#475569;font-size:.76rem}} th:first-child,td:first-child{{text-align:l
   </div>
 
   <div class="grid2">
-    <div class="section anchor-target" id="shiftSection"><h2>Shift-Level Demand and Dominant Crime</h2><div class="note">Reflects the automated 28-day pipeline window; not affected by the custom date range filter.</div><div id="shiftSummary"></div></div>
+    <div class="section anchor-target" id="shiftSection"><h2>Shift-Level Demand and Dominant Crime</h2><div class="note">Uses the automated 14-day window by default and recomputes for the selected custom current range.</div><div id="shiftSummary"></div></div>
     <div class="section anchor-target" id="decisionSection"><h2>Decision-Purpose Workload and Dominant Crime</h2><div id="decisionSummary"></div></div>
   </div>
 
   <div class="grid2">
-    <div class="section anchor-target" id="timingSection"><h2>Recent Timing Snapshot</h2><div class="note">Reflects the automated 28-day pipeline window; not affected by the custom date range filter.</div><div id="timingSummary"></div></div>
-    <div class="section anchor-target" id="hotspotSection"><h2>Hotspot Change Snapshot</h2><div class="note">Reflects the automated 28-day pipeline window; not affected by the custom date range filter.</div><div id="hotspotSummary"></div></div>
+    <div class="section anchor-target" id="timingSection"><h2>Recent Timing Snapshot</h2><div class="note">Uses the automated 14-day window by default and recomputes for the selected custom current range.</div><div id="timingSummary"></div></div>
+    <div class="section anchor-target" id="hotspotSection"><h2>Hotspot Change Snapshot</h2><div class="note">Reflects the automated 14-day pipeline window; not affected by the custom date range filter.</div><div id="hotspotSummary"></div></div>
   </div>
 </div>
 </div>
@@ -4836,6 +5254,89 @@ function categoryCountsInRange(precinct,startOffset,endOffset){{
  }});
  return{{byCategory:out,total:total}};
 }}
+
+const hourlyCounts=DATA.hourly_counts||{{precincts:[],categories:[],base_date:null,rows:[]}};
+const hcPrecinctIdx={{}};(hourlyCounts.precincts||[]).forEach((p,i)=>{{hcPrecinctIdx[p]=i;}});
+const hcBaseDate=hourlyCounts.base_date?new Date(hourlyCounts.base_date+'T00:00:00Z'):null;
+
+function hourlyDayOffsetFor(dateStr){{
+ if(!hcBaseDate||!dateStr)return null;
+ const d=new Date(dateStr+'T00:00:00Z');
+ return Math.round((d-hcBaseDate)/86400000);
+}}
+function shiftForHour(hour){{
+ const h=Number(hour);
+ if(h>=6&&h<=13)return 'Day Shift (06:00-13:59)';
+ if(h>=14&&h<=21)return 'Evening Shift (14:00-21:59)';
+ return 'Night Shift (22:00-05:59)';
+}}
+function blockForHour(hour){{
+ const h=Number(hour);
+ if(h<=5)return '00:00-05:59';
+ if(h<=11)return '06:00-11:59';
+ if(h<=17)return '12:00-17:59';
+ return '18:00-23:59';
+}}
+function weekdayForOffset(dayOffset){{
+ if(!hcBaseDate)return 'Unknown';
+ const d=new Date(hcBaseDate.getTime()+Number(dayOffset)*86400000);
+ return ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d.getUTCDay()];
+}}
+function hourlyRowsForRange(precinct,startDate,endDate){{
+ const startOffset=hourlyDayOffsetFor(startDate),endOffset=hourlyDayOffsetFor(endDate);
+ if(startOffset===null||endOffset===null||startOffset>endOffset)return[];
+ const pIdx=hcPrecinctIdx[precinct];
+ if(pIdx===undefined)return[];
+ return (hourlyCounts.rows||[]).filter(r=>r[0]===pIdx&&r[2]>=startOffset&&r[2]<=endOffset);
+}}
+function customShiftSummary(precinct,startDate,endDate){{
+ const rows=hourlyRowsForRange(precinct,startDate,endDate);
+ const cats=hourlyCounts.categories||[];
+ const byShift={{}};
+ rows.forEach(r=>{{
+  const cat=cats[r[1]]||'Unknown',hour=r[3],cnt=Number(r[4]||0),shift=shiftForHour(hour);
+  if(!byShift[shift])byShift[shift]={{incidents:0,byCrime:{{}}}};
+  byShift[shift].incidents+=cnt;
+  byShift[shift].byCrime[cat]=(byShift[shift].byCrime[cat]||0)+cnt;
+ }});
+ const order=['Day Shift (06:00-13:59)','Evening Shift (14:00-21:59)','Night Shift (22:00-05:59)'];
+ return order.filter(s=>byShift[s]).map(shift=>{{
+  const info=byShift[shift];
+  let dom='—',domCount=0;
+  Object.keys(info.byCrime).forEach(cat=>{{if(info.byCrime[cat]>domCount){{dom=cat;domCount=info.byCrime[cat];}}}});
+  return{{shift:shift,incidents:info.incidents,dominant_offense:dom,dominant_offense_count:domCount,dominant_offense_share:info.incidents?domCount/info.incidents:null}};
+ }});
+}}
+function customTimingSummary(precinct,startDate,endDate){{
+ const rows=hourlyRowsForRange(precinct,startDate,endDate);
+ if(!rows.length)return null;
+ const byDay={{}},byHour={{}},byShift={{}},byBlock={{}};
+ let total=0;
+ rows.forEach(r=>{{
+  const day=weekdayForOffset(r[2]),hour=Number(r[3]),cnt=Number(r[4]||0);
+  const shift=shiftForHour(hour),block=blockForHour(hour);
+  byDay[day]=(byDay[day]||0)+cnt;
+  byHour[hour]=(byHour[hour]||0)+cnt;
+  byShift[shift]=(byShift[shift]||0)+cnt;
+  byBlock[block]=(byBlock[block]||0)+cnt;
+  total+=cnt;
+ }});
+ function peak(obj){{
+  let key=null,count=-1;
+  Object.keys(obj).forEach(k=>{{if(obj[k]>count){{key=k;count=obj[k];}}}});
+  return [key,count];
+ }}
+ const pd=peak(byDay),ph=peak(byHour),ps=peak(byShift),pb=peak(byBlock);
+ return{{
+  total_incidents:total,
+  peak_day:pd[0]||'—',peak_day_count:pd[1]||0,
+  peak_hour:ph[0]===null?null:Number(ph[0]),peak_hour_count:ph[1]||0,
+  peak_shift:ps[0]||'—',peak_shift_count:ps[1]||0,
+  peak_time_block:pb[0]||'—',peak_time_block_count:pb[1]||0,
+  period_start:startDate,period_end:endDate
+ }};
+}}
+
 function computeConcernRows(prevByCat,currByCat,cityPrevByCat,cityCurrByCat,ytdLookup){{
  const cats=Object.keys(Object.assign({{}},prevByCat,currByCat));
  const rows=cats.map(cat=>{{
@@ -4883,12 +5384,87 @@ let customRange=null;
 }})();
 
 function renderCity(){{
+ // Existing top context cards remain useful above the citywide landing experience.
  document.getElementById('cityCards').innerHTML=`
  <div class="card"><div class="label">Total incidents ${{city.min_year}}–${{city.max_year}}</div><div class="value">${{fmtN(city.total_incidents)}}</div></div>
  <div class="card"><div class="label">${{city.current_year}} YTD incidents</div><div class="value">${{fmtN(city.current_ytd)}}</div></div>
  <div class="card"><div class="label">${{city.current_year}} vs ${{city.previous_year}} YTD</div><div class="value ${{pctClass(city.pct_change_ytd)}}">${{fmtPct(city.pct_change_ytd)}}</div></div>
  <div class="card"><div class="label">Operational precincts</div><div class="value">${{fmtN(city.precinct_count)}}</div></div>
  <div class="card"><div class="label">Highest-volume precinct</div><div class="value">${{city.highest_volume_precinct?'P'+city.highest_volume_precinct:'—'}}</div><div class="note">${{city.highest_volume?fmtN(city.highest_volume)+' current YTD':''}}</div></div>`;
+
+ const rows=Object.keys(precincts).map(p=>{{
+  const d=precincts[p]||{{}},r=d.recent||{{}},ov=d.overall||{{}},concerns=d.concerns||[];
+  return {{
+   precinct:p,
+   current:Number(r.current_14d||0),
+   previous:Number(r.previous_14d||0),
+   change:r.pct_change_14d,
+   ytdChange:ov.pct_change_vs_previous,
+   ytd:Number(ov.incidents_current||0),
+   concern:concerns.length?(concerns[0].crime||concerns[0].offense_category||'Attention signal'):'No elevated signal',
+   concernSignal:concerns.length?(concerns[0].signal||concerns[0].priority_signal||''):''
+  }};
+ }});
+
+ const currentTotal=rows.reduce((a,r)=>a+r.current,0);
+ const previousTotal=rows.reduce((a,r)=>a+r.previous,0);
+ const recentPct=previousTotal?100*(currentTotal-previousTotal)/previousTotal:null;
+ const increasing=rows.filter(r=>r.change!==null&&r.change!==undefined&&Number(r.change)>0).length;
+ const improving=rows.filter(r=>r.change!==null&&r.change!==undefined&&Number(r.change)<0).length;
+
+ document.getElementById('cityOverviewKpis').innerHTML=`
+ <div class="card"><div class="label">Current 14 days</div><div class="value">${{fmtN(currentTotal)}}</div></div>
+ <div class="card"><div class="label">Previous 14 days</div><div class="value">${{fmtN(previousTotal)}}</div></div>
+ <div class="card"><div class="label">Citywide recent change</div><div class="value ${{pctClass(recentPct)}}">${{fmtPct(recentPct)}}</div></div>
+ <div class="card"><div class="label">Precincts increasing</div><div class="value high">${{increasing}}</div></div>
+ <div class="card"><div class="label">Precincts decreasing</div><div class="value improving">${{improving}}</div></div>`;
+
+ const attention=rows.filter(r=>r.change!==null&&r.change!==undefined&&Number(r.change)>0)
+   .sort((a,b)=>Number(b.change)-Number(a.change)).slice(0,5);
+ document.getElementById('cityAttention').innerHTML=attention.length?attention.map((r,i)=>`
+  <div class="attention-row" data-precinct="${{r.precinct}}" style="cursor:pointer">
+   <div class="attention-rank">${{i+1}}</div>
+   <div><b>P${{r.precinct}}</b></div>
+   <div><b>${{r.concern}}</b><div class="note">${{fmtN(r.current)}} current vs ${{fmtN(r.previous)}} previous</div></div>
+   <div class="attention-change high">${{fmtPct(r.change)}}</div>
+  </div>`).join(''):'<div class="empty">No precincts currently show a recent increase.</div>';
+
+ // Aggregate the already-calculated precinct crime rows into a citywide current-14D snapshot.
+ const crimeTotals={{}};
+ Object.values(precincts).forEach(d=>{{
+  (d.dominant_crimes||[]).forEach(r=>{{
+   const name=r.crime||r.offense_category||r.crime_type||'Unknown';
+   const val=Number(r.current_14d||r.current_28d||r.incidents_current||r.current_incidents||0);
+   crimeTotals[name]=(crimeTotals[name]||0)+val;
+  }});
+ }});
+ const crimeRows=Object.entries(crimeTotals).sort((a,b)=>b[1]-a[1]).slice(0,7);
+ const maxCrime=crimeRows.length?crimeRows[0][1]:1;
+ document.getElementById('cityCrimeSnapshot').innerHTML=crimeRows.length?crimeRows.map(([name,val])=>`
+  <div class="city-crime-row"><div><b>${{name}}</b></div><div class="city-bar"><i style="width:${{Math.max(4,100*val/maxCrime)}}%"></i></div><div style="text-align:right;font-weight:850">${{fmtN(val)}}</div></div>`).join('')
+  :'<div class="empty">Crime-type summary unavailable.</div>';
+
+ const sorted=rows.slice().sort((a,b)=>Number(b.change||0)-Number(a.change||0));
+ document.getElementById('cityPrecinctGlance').innerHTML=sorted.map(r=>`
+  <div class="precinct-tile" data-precinct="${{r.precinct}}" tabindex="0" role="button" aria-label="Open Precinct ${{r.precinct}} Operations Evaluation">
+   <div class="phead"><div class="pnum">Precinct ${{r.precinct}}</div><div class="change ${{pctClass(r.change)}}">${{fmtPct(r.change)}}</div></div>
+   <div class="mini">
+    <div><span>Current 14D</span><b>${{fmtN(r.current)}}</b></div>
+    <div><span>Previous 14D</span><b>${{fmtN(r.previous)}}</b></div>
+   </div>
+   <div class="concern">Top concern<br><b>${{r.concern}}</b></div>
+   <div class="note" style="margin-top:8px;">Open precinct evaluation →</div>
+  </div>`).join('');
+
+ function openPrecinctFromCity(p){{
+  select.value=p;
+  renderPrecinct(p);
+  window.scrollTo({{top:0,behavior:'smooth'}});
+ }}
+ document.querySelectorAll('#cityPrecinctGlance [data-precinct],#cityAttention [data-precinct]').forEach(el=>{{
+  el.addEventListener('click',()=>openPrecinctFromCity(el.dataset.precinct));
+  el.addEventListener('keydown',e=>{{if(e.key==='Enter'||e.key===' '){{e.preventDefault();openPrecinctFromCity(el.dataset.precinct);}}}});
+ }});
 }}
 
 function simpleTable(headers,rows){{
@@ -4907,7 +5483,7 @@ function renderPrecinct(p){{
  document.getElementById('precinctDate').textContent='Matched YTD through '+(ov.comparison_date||city.data_through)+' · full data coverage '+city.min_year+'–'+city.max_year;
  document.getElementById('trendBadge').textContent=ov.improvement_status||'Trend unavailable';
 
- let rec, crimeRecordsOverride=null, concernsOverride=null, decisionOverride=null;
+ let rec, crimeRecordsOverride=null, concernsOverride=null, decisionOverride=null, shiftOverride=null, timingOverride=null;
  const statusEl=document.getElementById('rangeStatus');
  if(customRange){{
   const prevStartOff=dayOffsetFor(customRange.prevStart),prevEndOff=dayOffsetFor(customRange.prevEnd);
@@ -4954,6 +5530,9 @@ function renderPrecinct(p){{
    return{{purpose:purpose,incidents:info.incidents,dominant_offense:domCat,dominant_offense_count:domCount,dominant_offense_share:info.incidents?domCount/info.incidents:null}};
   }}).sort((a,b)=>b.incidents-a.incidents);
 
+  shiftOverride=customShiftSummary(p,customRange.currStart,customRange.currEnd);
+  timingOverride=customTimingSummary(p,customRange.currStart,customRange.currEnd);
+
   if(statusEl)statusEl.textContent='Custom range applied: '+customRange.currStart+' to '+customRange.currEnd+' vs '+customRange.prevStart+' to '+customRange.prevEnd+'.';
  }} else {{
   rec=d.recent||{{}};
@@ -4961,11 +5540,11 @@ function renderPrecinct(p){{
  }}
 
  document.getElementById('precinctCards').innerHTML=`
- <div class="card"><div class="label">${{city.current_year}} YTD incidents</div><div class="value">${{fmtN(ov.incidents_current)}}</div></div>
- <div class="card"><div class="label">vs ${{city.previous_year}} YTD</div><div class="value ${{pctClass(ov.pct_change_vs_previous)}}">${{fmtPct(ov.pct_change_vs_previous)}}</div></div>
- <div class="card"><div class="label">${{customRange?'Custom current range':'Current 14 days'}}</div><div class="value">${{fmtN(customRange?rec.current_28d:rec.current_14d)}}</div><div class="note ${{pctClass(customRange?rec.pct_change_28d:rec.pct_change_14d)}}">${{fmtPct(customRange?rec.pct_change_28d:rec.pct_change_14d)}} vs ${{customRange?'custom previous range':'prior 14D'}}</div></div>
- <div class="card"><div class="label">Priority concerns</div><div class="value">${{fmtN((concernsOverride||d.concerns||[]).length)}}</div></div>
- <div class="card"><div class="label">Focus locations</div><div class="value">${{fmtN((d.focus_locations||[]).length)}}</div></div>`;
+ <div class="card"><div class="label">${{customRange?'Current custom range':'Current 14 days'}}</div><div class="value">${{fmtN(customRange?rec.current_28d:rec.current_14d)}}</div></div>
+ <div class="card"><div class="label">${{customRange?'Previous custom range':'Previous 14 days'}}</div><div class="value">${{fmtN(customRange?rec.previous_28d:rec.previous_14d)}}</div></div>
+ <div class="card"><div class="label">Recent change</div><div class="value ${{pctClass(customRange?rec.pct_change_28d:rec.pct_change_14d)}}">${{fmtPct(customRange?rec.pct_change_28d:rec.pct_change_14d)}}</div></div>
+ <div class="card"><div class="label">${{city.current_year}} vs ${{city.previous_year}} YTD</div><div class="value ${{pctClass(ov.pct_change_vs_previous)}}">${{fmtPct(ov.pct_change_vs_previous)}}</div><div class="note">${{fmtN(ov.incidents_current)}} current YTD</div></div>
+ <div class="card"><div class="label">Priority concerns</div><div class="value">${{fmtN((concernsOverride||d.concerns||[]).length)}}</div><div class="note">${{fmtN((d.focus_locations||[]).length)}} focus locations</div></div>`;
 
  let s=[];
  if(ov.pct_change_vs_previous!==null&&ov.pct_change_vs_previous!==undefined)s.push(`Overall matched-YTD incidents are ${{Math.abs(Number(ov.pct_change_vs_previous)).toFixed(1)}}% ${{Number(ov.pct_change_vs_previous)<0?'below':'above'}} ${{city.previous_year}}.`);
@@ -4973,25 +5552,28 @@ function renderPrecinct(p){{
  else if(rec.pct_change_14d!==null&&rec.pct_change_14d!==undefined)s.push(`Recent activity moved from ${{fmtN(rec.previous_14d)}} to ${{fmtN(rec.current_14d)}} incidents (${{fmtPct(rec.pct_change_14d)}}).`);
  const concernsForBrief=concernsOverride||d.concerns;
  if(concernsForBrief&&concernsForBrief.length)s.push(`${{concernsForBrief[0].crime}} is the leading current attention signal (${{concernsForBrief[0].signal}}).`);
- if(d.timing)s.push(`Recent activity peaks on ${{d.timing.peak_day}} around ${{hourLabel(d.timing.peak_hour)}}, with ${{d.timing.peak_time_block}} as the busiest broad time block.`);
+ const timingForBrief=timingOverride||d.timing;
+ if(timingForBrief)s.push(`${{customRange?'Selected-period':'Recent'}} activity peaks on ${{timingForBrief.peak_day}} around ${{hourLabel(timingForBrief.peak_hour)}}, with ${{timingForBrief.peak_time_block}} as the busiest broad time block.`);
  if(d.focus_locations&&d.focus_locations.length)s.push(`The highest-ranked focus location is ${{d.focus_locations[0].neighborhood}} near ${{d.focus_locations[0].intersection}}.`);
  document.getElementById('precinctBrief').textContent=s.join(' ');
+ const quickConcern=(concernsForBrief&&concernsForBrief.length)?concernsForBrief[0]:null;
+ document.getElementById('topConcernQuick').textContent=quickConcern?(quickConcern.crime+' · '+quickConcern.signal):'No elevated signal';
+ document.getElementById('timingQuick').textContent=timingForBrief?(timingForBrief.peak_day+' · '+hourLabel(timingForBrief.peak_hour)):'Timing unavailable';
 
+ document.getElementById('buildMapBtn').href='../Images/'+DATA.area_map_filename+'?precinct='+encodeURIComponent(p);
  document.getElementById('classicLinks').innerHTML=[
    assetLink(analysisUrl(p,'map'),'Open Interactive Precinct Map'),
-   assetLink(a.focus_map,'Open Focus Locations Map'),
-   assetLink(a.spike_map,'Open Spike Severity Choropleth'),
-   assetLink(a.shift_chart,'Open Shift Summary Chart'),
-   assetLink(a.decision_chart,'Open Decision Purpose Chart'),
-   assetLink(a.monthly_heatmap,'Open Precinct Monthly Trend Heatmap'),
-   assetLink(a.violent_type_chart,'Open Violent Crime 14-Day Type Breakdown'),
-   assetLink(a.violent_day_hour,'Open Violent Crime 14-Day Day/Hour')
+   assetLink(a.shift_chart,'Shift Summary Chart'),
+   assetLink(a.decision_chart,'Decision Purpose Chart'),
+   assetLink(a.monthly_heatmap,'Monthly Trend Heatmap'),
+   assetLink(a.violent_type_chart,'Violent Crime 14-Day Breakdown'),
+   assetLink(a.violent_day_hour,'Violent Crime Day / Hour')
  ].filter(Boolean).join('');
  document.getElementById('modernLinks').innerHTML=[
-   assetLink(analysisUrl(p,'trends'),'Open Crime Trend Analysis'),
-   assetLink(analysisUrl(p,'priority'),'Open Priority / Emerging Concerns'),
-   assetLink(analysisUrl(p,'timing'),'Open Temporal Analysis'),
-   assetLink(analysisUrl(p,'hotspot'),'Open Hotspot Changes')
+   assetLink(analysisUrl(p,'trends'),'Crime Trend Analysis'),
+   assetLink(analysisUrl(p,'priority'),'Priority / Emerging Concerns'),
+   assetLink(analysisUrl(p,'timing'),'Temporal Analysis'),
+   assetLink(analysisUrl(p,'hotspot'),'Hotspot Changes')
  ].filter(Boolean).join('');
 
  const fl=(d.focus_locations||[]).map(r=>[
@@ -5010,7 +5592,7 @@ function renderPrecinct(p){{
  </div>`;
 
  document.getElementById('improvementSummary').innerHTML=simpleTable(
- ['$2024','$2025','$2026','vs $2025','vs $2024','Status','Score'],
+ ['2024','2025','2026','vs 2025','vs 2024','Status','Score'],
  [[fmtN(ov.incidents_baseline),fmtN(ov.incidents_previous),fmtN(ov.incidents_current),fmtPct(ov.pct_change_vs_previous),fmtPct(ov.pct_change_vs_baseline),ov.improvement_status||'—',ov.improvement_score===null?'—':Number(ov.improvement_score).toFixed(2)]]
  );
  const wd=(d.worsening_drivers||[]).map(r=>[r.crime,fmtN(r.previous),fmtN(r.current),fmtPct(r.pct),r.trend]);
@@ -5047,14 +5629,15 @@ function renderPrecinct(p){{
    cr
  );
 
- const sh=(d.shift_summary||[]).map(r=>[r.shift,fmtN(r.incidents),r.dominant_offense,fmtN(r.dominant_offense_count),fmtShare(r.dominant_offense_share)]);
+ const sh=(shiftOverride||d.shift_summary||[]).map(r=>[r.shift,fmtN(r.incidents),r.dominant_offense,fmtN(r.dominant_offense_count),fmtShare(r.dominant_offense_share)]);
  document.getElementById('shiftSummary').innerHTML=simpleTable(['Shift','Incidents','Dominant crime','Dominant count','Share'],sh);
 
  const ds=(decisionOverride||d.decision_summary||[]).map(r=>[r.purpose,fmtN(r.incidents),r.dominant_offense,fmtN(r.dominant_offense_count),fmtShare(r.dominant_offense_share)]);
  document.getElementById('decisionSummary').innerHTML=simpleTable(['Decision purpose','Incidents','Dominant crime','Dominant count','Share'],ds);
 
- if(d.timing)document.getElementById('timingSummary').innerHTML=`<div class="metric-list"><div class="metric"><span class="note">Peak day</span><b>${{d.timing.peak_day}}</b></div><div class="metric"><span class="note">Peak hour</span><b>${{hourLabel(d.timing.peak_hour)}}</b></div><div class="metric"><span class="note">Busiest block</span><b>${{d.timing.peak_time_block}}</b></div><div class="metric"><span class="note">Dominant shift</span><b>${{d.timing.peak_shift}}</b></div></div>`;
- else document.getElementById('timingSummary').innerHTML='<div class="empty">Recent timing profile unavailable.</div>';
+ const timingView=timingOverride||d.timing;
+ if(timingView)document.getElementById('timingSummary').innerHTML=`<div class="metric-list"><div class="metric"><span class="note">Peak day</span><b>${{timingView.peak_day}}</b></div><div class="metric"><span class="note">Peak hour</span><b>${{hourLabel(timingView.peak_hour)}}</b></div><div class="metric"><span class="note">Busiest block</span><b>${{timingView.peak_time_block}}</b></div><div class="metric"><span class="note">Dominant shift</span><b>${{timingView.peak_shift}}</b></div></div>`;
+ else document.getElementById('timingSummary').innerHTML='<div class="empty">Timing profile unavailable.</div>';
 
  const h=d.hotspots||{{new:0,emerging:0,persistent:0,declining:0}};
  document.getElementById('hotspotSummary').innerHTML=`<div class="metric-list"><div class="metric"><span class="note">New</span><b>${{h.new}}</b></div><div class="metric"><span class="note">Emerging</span><b>${{h.emerging}}</b></div><div class="metric"><span class="note">Persistent</span><b>${{h.persistent}}</b></div><div class="metric"><span class="note">Declining</span><b>${{h.declining}}</b></div></div>`;
@@ -5202,8 +5785,6 @@ def save_decision_dashboard_html(
 
   <div class=\"links\">
         <a href=\"../Images/detroit_crime_interactive_dashboard_{period_tag}.html\" target=\"_blank\">Open Interactive Map Dashboard</a>
-        <a href=\"../Images/detroit_precinct_focus_locations_{period_tag}.html\" target=\"_blank\">Open Focus Locations Map</a>
-        <a href=\"../Images/detroit_crime_h3_spike_severity_choropleth_{period_tag}.html\" target=\"_blank\">Open Spike Severity Choropleth</a>
                 <a href="../Images/detroit_shift_incidents_{period_tag}.png" target="_blank">Open Shift Summary Chart</a>
                 <a href="../Images/detroit_decision_purpose_incidents_{period_tag}.png" target="_blank">Open Decision Purpose Chart</a>
             <a href="../Images/detroit_precinct_monthly_trend_heatmap_{period_tag}.png" target="_blank">Open Precinct Monthly Trend Heatmap</a>
