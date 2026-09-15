@@ -56,6 +56,21 @@ jobs:
           git add Documentation/
           git add Images/ ':!Images/detroit_crime_interactive_dashboard_2024_2026.html'
 
+          COMBINED_DASHBOARD="Images/detroit_crime_interactive_dashboard_2024_2026.html"
+          MAX_SIZE=$((95 * 1024 * 1024))
+
+          if [ -f "$COMBINED_DASHBOARD" ]; then
+            FILE_SIZE=$(wc -c < "$COMBINED_DASHBOARD" | tr -d ' ')
+
+            if [ "$FILE_SIZE" -le "$MAX_SIZE" ]; then
+              echo "Combined dashboard is within publish limit: $FILE_SIZE bytes"
+              git add "$COMBINED_DASHBOARD"
+            else
+              echo "Combined dashboard is too large to publish: $FILE_SIZE bytes"
+              echo "Leaving the existing published version unchanged."
+            fi
+          fi
+
           if git diff --cached --quiet; then
             echo "No dashboard changes to publish."
           else
