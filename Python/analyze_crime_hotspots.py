@@ -32,6 +32,40 @@ DOCS_DIR = BASE_DIR / "Documentation"
 RECENT_WINDOW_DAYS = 14
 RECENT_WINDOW_LABEL = f"{RECENT_WINDOW_DAYS}D"
 
+# ---------------------------------------------------------------------------
+# OPERATIONAL CRIME CATEGORY DEFINITIONS
+# Keep these definitions centralized so every dashboard component uses the
+# same records for selectors, heatmaps, neighborhood/precinct scopes, timing,
+# and hotspot analysis.
+# ---------------------------------------------------------------------------
+VIOLENT_CRIMES = {
+    "HOMICIDE",
+    "SEXUAL ASSAULT",
+    "ROBBERY",
+    "AGGRAVATED ASSAULT",
+    "ASSAULT",
+}
+
+PROPERTY_CRIMES = {
+    "BURGLARY",
+    "LARCENY",
+    "DAMAGE TO PROPERTY",
+    "ARSON",
+}
+
+VEHICLE_LARCENY_PATTERN = re.compile(
+    r"\b(?:VEHICLE|AUTO|AUTOMOBILE|CAR|TRUCK|MOTOR VEHICLE|"
+    r"FROM VEHICLE|VEHICLE PART|VEHICLE PARTS|CATALYTIC CONVERTER|"
+    r"LICENSE PLATE|WHEEL|WHEELS|TIRE|TIRES)\b",
+    flags=re.IGNORECASE,
+)
+
+CATEGORY_FOCUS_COLUMNS = {
+    "Violent Crime": "is_violent_crime",
+    "Property Crime": "is_property_crime",
+    "Vehicle-Related Crime": "is_vehicle_related",
+}
+
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 DOCS_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("MPLCONFIGDIR", str(BASE_DIR / ".matplotlib_cache"))
@@ -106,13 +140,39 @@ def load_data(dataset_dir: Path) -> pd.DataFrame:
     df["incident_date"] = df["incident_occurred_at"].dt.tz_convert(None).dt.date
     df["month_start"] = df["incident_occurred_at"].dt.tz_convert(None).dt.to_period("M").dt.start_time
 
-    description = df.get("offense_description", pd.Series("", index=df.index)).astype(str)
-    category = df.get("offense_category", pd.Series("", index=df.index)).astype(str).str.upper()
-    df["is_gun_related"] = description.str.contains("GUN|FIREARM|WEAPON|SHOT", case=False, na=False)
-    df["is_property_related"] = category.isin(
-        ["LARCENY", "BURGLARY", "STOLEN VEHICLE", "STOLEN PROPERTY", "DAMAGE TO PROPERTY"]
+    description = df.get("offense_description", pd.Series("", index=df.index)).fillna("").astype(str)
+    category = (
+        df.get("offense_category", pd.Series("", index=df.index))
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .str.upper()
     )
-    df["is_larceny_related"] = category.eq("LARCENY")
+
+    # Preserve the normalized category so every downstream comparison uses
+    # the same spelling/casing.
+    df["offense_category"] = category
+
+    # Operational category focuses used throughout the dashboard.
+    df["is_violent_crime"] = category.isin(VIOLENT_CRIMES)
+    df["is_property_crime"] = category.isin(PROPERTY_CRIMES)
+
+    # Vehicle-related = all STOLEN VEHICLE incidents plus LARCENY records
+    # whose offense description indicates theft from/of vehicle components.
+    vehicle_larceny = category.eq("LARCENY") & description.str.contains(
+        VEHICLE_LARCENY_PATTERN,
+        na=False,
+    )
+    df["is_vehicle_related"] = category.eq("STOLEN VEHICLE") | vehicle_larceny
+
+    # Retain the original gun flag for any non-category legacy analysis that
+    # may still reference it elsewhere in this large script.
+    df["is_gun_related"] = description.str.contains(
+        r"GUN|FIREARM|WEAPON|SHOT",
+        case=False,
+        na=False,
+        regex=True,
+    )
 
     return df
 
@@ -188,6 +248,7 @@ def add_top_selector_panel(
     temporal_summary: pd.DataFrame | None = None,
     temporal_matrix: pd.DataFrame | None = None,
     hotspot_change: pd.DataFrame | None = None,
+    spatial_daily: pd.DataFrame | None = None,
     precinct_bounds: dict[str, list[list[float]]] | None = None,
     neighborhood_bounds: dict[str, list[list[float]]] | None = None,
     current_year: int | None = None,
@@ -215,9 +276,9 @@ def add_top_selector_panel(
     )
 
     category_options = [
-        '<option value="Category Focus | Gun-Related">Category Focus: Gun-Related</option>',
+        '<option value="Category Focus | Violent Crime">Category Focus: Violent Crime</option>',
         '<option value="Category Focus | Property Crime">Category Focus: Property Crime</option>',
-        '<option value="Category Focus | Larceny">Category Focus: Larceny</option>',
+        '<option value="Category Focus | Vehicle-Related Crime">Category Focus: Vehicle-Related Crime</option>',
     ]
     category_options.extend(
         [
@@ -392,6 +453,24 @@ def add_top_selector_panel(
                 rec[col] = str(row.get(col, ""))
             hotspot_change_records.append(rec)
 
+    spatial_daily_records = []
+    if spatial_daily is not None and not spatial_daily.empty:
+        for _, row in spatial_daily.iterrows():
+            spatial_daily_records.append({
+                "date": str(row.get("date", "")),
+                "h3": str(row.get("h3", "")),
+                "precinct": str(row.get("precinct", "")),
+                "neighborhood": str(row.get("neighborhood", "Unknown")),
+                "crime": str(row.get("crime", "")),
+                "violent": bool(row.get("violent", False)),
+                "property": bool(row.get("property", False)),
+                "vehicle": bool(row.get("vehicle", False)),
+                "count": int(row.get("count", 0) or 0),
+                "lat": clean_number(row.get("lat")),
+                "lon": clean_number(row.get("lon")),
+                "intersection": str(row.get("intersection", "Unknown")),
+            })
+
     overall_json = json.dumps(overall_data, ensure_ascii=False).replace("</", "<\\/")
     crime_trend_json = json.dumps(crime_trend_records, ensure_ascii=False).replace("</", "<\\/")
     crime_14d_json = json.dumps(crime_14d_records, ensure_ascii=False).replace("</", "<\\/")
@@ -399,6 +478,7 @@ def add_top_selector_panel(
     temporal_summary_json = json.dumps(temporal_summary_records, ensure_ascii=False).replace("</", "<\\/")
     temporal_matrix_json = json.dumps(temporal_matrix_records, ensure_ascii=False).replace("</", "<\\/")
     hotspot_change_json = json.dumps(hotspot_change_records, ensure_ascii=False).replace("</", "<\\/")
+    spatial_daily_json = json.dumps(spatial_daily_records, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
 
     year_labels = {
         "current": int(current_year) if current_year is not None else None,
@@ -521,6 +601,9 @@ def add_top_selector_panel(
       var temporalSummaryData = {temporal_summary_json};
       var temporalMatrixData = {temporal_matrix_json};
       var hotspotChangeData = {hotspot_change_json};
+      var spatialDailyData = {spatial_daily_json};
+      var customSpatialRange = null;
+      var customSpatialLayer = null;
       var mapObjectName = "{m.get_name()}";
       var years = {year_json};
       var precinctBounds = {precinct_bounds_json};
@@ -747,17 +830,84 @@ def add_top_selector_panel(
         if(t==='Declining Hotspot') return 'hotspot-declining';
         return 'trend-stable';
       }}
+      function quantile(values,q) {{
+        var a=values.filter(function(v){{return Number(v)>0;}}).map(Number).sort(function(x,y){{return x-y;}});
+        if(!a.length) return 3;
+        var pos=(a.length-1)*q, base=Math.floor(pos), rest=pos-base;
+        var val=(a[base+1]!==undefined)?a[base]+rest*(a[base+1]-a[base]):a[base];
+        return Math.max(3,Math.ceil(val));
+      }}
+      function rowMatchesSpatialScope(r,precinct,scope,neighborhood) {{
+        if(precinct && r.precinct!==precinct) return false;
+        if(neighborhood && r.neighborhood!==neighborhood) return false;
+        if(scope.type==='Crime Type' && r.crime!==scope.name) return false;
+        if(scope.type==='Category Focus') {{
+          if(scope.name==='Violent Crime' && !r.violent) return false;
+          if(scope.name==='Property Crime' && !r.property) return false;
+          if(scope.name==='Vehicle-Related Crime' && !r.vehicle) return false;
+        }}
+        return true;
+      }}
+      function dynamicHotspotRows(precinct,scope) {{
+        if(!customSpatialRange || !spatialDailyData.length) return null;
+        var neighborhood=selectedNeighborhood();
+        var byCell={{}};
+        spatialDailyData.forEach(function(r) {{
+          if(!rowMatchesSpatialScope(r,precinct,scope,neighborhood)) return;
+          var isPrev=r.date>=customSpatialRange.prevStart && r.date<=customSpatialRange.prevEnd;
+          var isCurr=r.date>=customSpatialRange.currStart && r.date<=customSpatialRange.currEnd;
+          if(!isPrev && !isCurr) return;
+          var c=byCell[r.h3]||(byCell[r.h3]={{h3_cell:r.h3,previous_14d:0,current_14d:0,latitude:r.lat,longitude:r.lon,neighborhood:r.neighborhood,nearest_intersection:r.intersection}});
+          if(isPrev)c.previous_14d+=Number(r.count||0);
+          if(isCurr)c.current_14d+=Number(r.count||0);
+        }});
+        var cells=Object.values(byCell);
+        var pt=quantile(cells.map(function(c){{return c.previous_14d;}}),.80);
+        var ct=quantile(cells.map(function(c){{return c.current_14d;}}),.80);
+        var out=[];
+        cells.forEach(function(c) {{
+          var ph=c.previous_14d>=pt, ch=c.current_14d>=ct, status='Not Material';
+          if(ph&&ch)status='Persistent Hotspot';
+          else if(!ph&&ch&&c.previous_14d===0)status='New Hotspot';
+          else if(!ph&&ch)status='Emerging Hotspot';
+          else if(ph&&!ch)status='Declining Hotspot';
+          if(status==='Not Material')return;
+          c.hotspot_status=status; c.change_14d=c.current_14d-c.previous_14d;
+          c.pct_change_14d=c.previous_14d>0?100*c.change_14d/c.previous_14d:null;
+          c.hotspot_score=c.current_14d+1.5*Math.max(c.change_14d,0)+(status==='Persistent Hotspot'?c.current_14d*.35:0);
+          c.previous_hotspot_threshold=pt;c.current_hotspot_threshold=ct;
+          c.previous_14d_start=customSpatialRange.prevStart;c.previous_14d_end=customSpatialRange.prevEnd;
+          c.current_14d_start=customSpatialRange.currStart;c.current_14d_end=customSpatialRange.currEnd;
+          c.precinct_norm=precinct||'ALL';c.selection_type=scope.type;c.selection_name=scope.name;out.push(c);
+        }});
+        return out;
+      }}
       function hotspotRowsFor(precinct,scope) {{
+        var dynamic=dynamicHotspotRows(precinct,scope);
+        if(dynamic!==null) return dynamic;
         var p=precinct||'ALL';
         return hotspotChangeData.filter(function(r) {{
           return scopedRecord(r) && r.precinct_norm===p && r.selection_type===scope.type && r.selection_name===scope.name;
         }});
       }}
+      function renderCustomSpatialHeatmap() {{
+        var mp=window[mapObjectName]; if(!mp) return;
+        if(customSpatialLayer){{try{{mp.removeLayer(customSpatialLayer);}}catch(e){{}} customSpatialLayer=null;}}
+        if(!customSpatialRange || !spatialDailyData.length) return;
+        var precinct=(document.getElementById('cpPrecinctSelect')||{{value:''}}).value;
+        var scope=temporalScope(), neighborhood=selectedNeighborhood(), pts=[];
+        spatialDailyData.forEach(function(r){{
+          if(r.date<customSpatialRange.currStart||r.date>customSpatialRange.currEnd)return;
+          if(!rowMatchesSpatialScope(r,precinct,scope,neighborhood))return;
+          if(Number.isFinite(Number(r.lat))&&Number.isFinite(Number(r.lon)))pts.push([Number(r.lat),Number(r.lon),Number(r.count||1)]);
+        }});
+        if(pts.length && window.L && L.heatLayer){{customSpatialLayer=L.heatLayer(pts,{{radius:18,blur:15,maxZoom:15}}).addTo(mp);}}
+      }}
       // Emphasize the location selected from "Where is it changing?" so the
       // analyst does not have to visually search for the target after zooming.
       var hotspotHighlightLayer=null;
       var hotspotPulseTimer=null;
-      window.zoomHotspot=function(lat,lon) {{
+      window.zoomHotspot=function(lat,lon,prev,curr,chg,pct,status,loc,prevStart,prevEnd,currStart,currEnd) {{
         var mp=window[mapObjectName];
         if(!mp || lat===null || lon===null) return;
         var y=Number(lat), x=Number(lon);
@@ -791,7 +941,14 @@ def add_top_selector_panel(
           fillOpacity:0.95,
           interactive:true
         }}).addTo(hotspotHighlightLayer);
-        target.bindTooltip('<b>Selected hotspot location</b><br>Highlighted from Where is it changing?',{{permanent:false,direction:'top',offset:[0,-8]}}).openTooltip();
+        var pctText=(pct===null||pct===undefined||Number.isNaN(Number(pct)))?'—':(Number(pct)>=0?'+':'')+Number(pct).toFixed(1)+'%';
+        var changeText=(Number(chg)>=0?'+':'')+fmtN(chg);
+        var popup='<div style="min-width:235px;line-height:1.45"><b>'+String(status||'Hotspot')+'</b><br>'+String(loc||'Selected hotspot')+'<hr style="margin:6px 0;border:0;border-top:1px solid #e2e8f0">'+
+          '<b>Previous period:</b> '+fmtN(prev)+' incidents<br><span style="color:#64748b">'+String(prevStart||'')+' to '+String(prevEnd||'')+'</span><br>'+
+          '<b>Current period:</b> '+fmtN(curr)+' incidents<br><span style="color:#64748b">'+String(currStart||'')+' to '+String(currEnd||'')+'</span><br>'+
+          '<b>Change:</b> '+changeText+' ('+pctText+')</div>';
+        target.bindPopup(popup,{{maxWidth:320}}).openPopup();
+        target.bindTooltip('<b>Selected hotspot location</b><br>Click for comparison counts',{{permanent:false,direction:'top',offset:[0,-8]}});
 
         // Pulse the halo a few times, then leave a clear target ring in place.
         var pulse=0;
@@ -812,11 +969,13 @@ def add_top_selector_panel(
       function hotspotTableHtml(rows,limit) {{
         var use=rows.slice(0,limit||8);
         if(!use.length) return '<div style="color:#64748b;margin-top:4px;">No material hotspot change locations for this selection.</div>';
-        var h='<table><thead><tr><th>Status / Location</th><th>Prev 14D</th><th>Current 14D</th><th>Abs Δ</th><th>%chg</th><th>Map</th></tr></thead><tbody>';
+        var prevHead=customSpatialRange?'Prev Range':'Prev 14D', currHead=customSpatialRange?'Current Range':'Current 14D';
+        var h='<table><thead><tr><th>Status / Location</th><th>'+prevHead+'</th><th>'+currHead+'</th><th>Abs Δ</th><th>%chg</th><th>Map</th></tr></thead><tbody>';
         use.forEach(function(r) {{
           var loc=(r.nearest_intersection && r.nearest_intersection!=='Unknown')?r.nearest_intersection:r.neighborhood;
           var label='<span class="'+hotspotStatusClass(r.hotspot_status)+'">'+r.hotspot_status+'</span><br><span style="color:#475569;">'+loc+'</span>';
-          h+='<tr><td>'+label+'</td><td>'+fmtN(r.previous_14d)+'</td><td>'+fmtN(r.current_14d)+'</td><td>'+fmtN(r.change_14d)+'</td><td>'+fmtPct(r.pct_change_14d)+'</td><td><button onclick="window.zoomHotspot('+r.latitude+','+r.longitude+')" style="padding:3px 6px;border:1px solid #c4b5fd;border-radius:5px;background:#fff;cursor:pointer;">Zoom</button></td></tr>';
+          var payload=encodeURIComponent(JSON.stringify([r.latitude,r.longitude,r.previous_14d,r.current_14d,r.change_14d,r.pct_change_14d,r.hotspot_status,loc,r.previous_14d_start,r.previous_14d_end,r.current_14d_start,r.current_14d_end]));
+          h+='<tr><td>'+label+'</td><td>'+fmtN(r.previous_14d)+'</td><td>'+fmtN(r.current_14d)+'</td><td>'+fmtN(r.change_14d)+'</td><td>'+fmtPct(r.pct_change_14d)+'</td><td><button type="button" class="cp-hotspot-zoom" data-hotspot="'+payload+'" style="padding:3px 6px;border:1px solid #c4b5fd;border-radius:5px;background:#fff;cursor:pointer;">Zoom</button></td></tr>';
         }});
         return h+'</tbody></table>';
       }}
@@ -837,7 +996,7 @@ def add_top_selector_panel(
         if(newEmerging.length) body+='<div style="margin-top:7px;"><b>New / emerging locations needing attention</b></div>'+hotspotTableHtml(newEmerging,6);
         if(persistent.length) body+='<div style="margin-top:8px;"><b>Persistent concentrations</b></div>'+hotspotTableHtml(persistent,5);
         if(declining.length) body+='<div style="margin-top:8px;"><b>Declining hotspots</b></div>'+hotspotTableHtml(declining,5);
-        if(!body) body='<div style="margin-top:5px;color:#64748b;">No cells crossed the hotspot thresholds in either 14-day period for this selection.</div>';
+        if(!body) body='<div style="margin-top:5px;color:#64748b;">No cells crossed the hotspot thresholds in either comparison period for this selection.</div>';
         card.innerHTML='<b>Where is it changing? — '+label+'</b>'+summary+body+'<div style="margin-top:5px;color:#64748b;font-size:11px;">Hotspots are relative to the selected precinct/crime scope: cells at or above the 80th percentile of occupied-cell counts, with a minimum of 3 incidents. Use Zoom to inspect the location on the map.</div>';
       }}
 
@@ -907,16 +1066,18 @@ def add_top_selector_panel(
         setExclusiveByPrefix('Crime Type | ','');
         setExclusiveByPrefix('Scope | Precinct | ','');
                 setExclusiveByPrefix('Scope | Neighborhood | ','');
-                if(neighborhood) {{
-                    setExclusiveByPrefix('Scope | Neighborhood | ','Scope | Neighborhood | '+neighborhood+' | Precinct | '+(precinct||'ALL')+' | '+(category||'All Crime'));
-                }} else if(precinct && category) {{
-          setExclusiveByPrefix('Scope | Precinct | ','Scope | Precinct | '+precinct+' | '+category);
-        }} else if(precinct) {{
-          setExclusiveByPrefix('Precinct | ','Precinct | '+precinct);
-        }} else if(category.startsWith('Category Focus | ')) {{
-          setExclusiveByPrefix('Category Focus | ',category);
-        }} else if(category.startsWith('Crime Type | ')) {{
-          setExclusiveByPrefix('Crime Type | ',category);
+                if(!customSpatialRange) {{
+          if(neighborhood) {{
+            setExclusiveByPrefix('Scope | Neighborhood | ','Scope | Neighborhood | '+neighborhood+' | Precinct | '+(precinct||'ALL')+' | '+(category||'All Crime'));
+          }} else if(precinct && category) {{
+            setExclusiveByPrefix('Scope | Precinct | ','Scope | Precinct | '+precinct+' | '+category);
+          }} else if(precinct) {{
+            setExclusiveByPrefix('Precinct | ','Precinct | '+precinct);
+          }} else if(category.startsWith('Category Focus | ')) {{
+            setExclusiveByPrefix('Category Focus | ',category);
+          }} else if(category.startsWith('Crime Type | ')) {{
+            setExclusiveByPrefix('Crime Type | ',category);
+          }}
         }}
         setExclusiveByPrefix('Core Type | H3 Count | ', core.startsWith('Core Type | H3 Count | ')?core:'');
         zoomToPrecinct(precinct);
@@ -927,6 +1088,7 @@ def add_top_selector_panel(
         renderPriorityCard();
         renderTimingCard();
         renderHotspotCard();
+        renderCustomSpatialHeatmap();
         renderTrendCard();
         applyViewEmphasis();
       }};
@@ -959,6 +1121,13 @@ def add_top_selector_panel(
         setTimeout(function(){{target.style.boxShadow=prior;}},2200);
       }};
 
+      document.addEventListener('click',function(ev) {{
+        var btn=ev.target.closest && ev.target.closest('.cp-hotspot-zoom');
+        if(!btn)return;
+        ev.preventDefault(); ev.stopPropagation();
+        try{{var a=JSON.parse(decodeURIComponent(btn.getAttribute('data-hotspot')||''));window.zoomHotspot.apply(null,a);}}catch(err){{console.error('Hotspot zoom failed',err);}}
+      }});
+
       function applyUrlState() {{
         try {{
           var params=new URLSearchParams(window.location.search);
@@ -967,6 +1136,8 @@ def add_top_selector_panel(
           var crime=params.get('crime')||'';
           var view=params.get('view')||'';
           var section=params.get('section')||'';
+          var prevStart=params.get('prevStart')||'', prevEnd=params.get('prevEnd')||'', currStart=params.get('currStart')||'', currEnd=params.get('currEnd')||'';
+          if(prevStart&&prevEnd&&currStart&&currEnd) customSpatialRange={{prevStart:prevStart,prevEnd:prevEnd,currStart:currStart,currEnd:currEnd}};
           var psel=document.getElementById('cpPrecinctSelect');
           if(psel && precinct && Array.from(psel.options).some(function(o){{return o.value===precinct;}})) psel.value=precinct;
           var nsel=document.getElementById('cpNeighborhoodSelect');
@@ -1345,9 +1516,8 @@ def add_precinct_filter_layers(m: folium.Map, df: pd.DataFrame) -> None:
 
 def add_focus_category_layers(m: folium.Map, df: pd.DataFrame) -> None:
     category_specs = [
-        ("Category Focus | Gun-Related", df[df["is_gun_related"]]),
-        ("Category Focus | Property Crime", df[df["is_property_related"]]),
-        ("Category Focus | Larceny", df[df["is_larceny_related"]]),
+        (f"Category Focus | {focus_name}", df[df[flag_col].fillna(False)])
+        for focus_name, flag_col in CATEGORY_FOCUS_COLUMNS.items()
     ]
 
     for name, subset in category_specs:
@@ -1386,9 +1556,8 @@ def add_precinct_scope_heatmap_layers(m: folium.Map, df: pd.DataFrame) -> None:
             layer.add_to(m)
 
         focus_specs = [
-            ("Gun-Related", p_df[p_df["is_gun_related"]]),
-            ("Property Crime", p_df[p_df["is_property_related"]]),
-            ("Larceny", p_df[p_df["is_larceny_related"]]),
+            (focus_name, p_df[p_df[flag_col].fillna(False)])
+            for focus_name, flag_col in CATEGORY_FOCUS_COLUMNS.items()
         ]
         for focus_name, subset in focus_specs:
             if subset.empty:
@@ -1716,7 +1885,7 @@ def build_temporal_pattern_profiles(
     """Build YTD and recent-14-day timing profiles for dashboard selections.
 
     Profiles are available citywide and by precinct for: all incidents, every
-    offense category, and the three existing Category Focus groups.
+    offense category, and the three operational Category Focus groups.
     """
     temp = df.copy()
     temp["incident_date"] = pd.to_datetime(temp["incident_date"])
@@ -1744,9 +1913,8 @@ def build_temporal_pattern_profiles(
     ]
 
     focus_specs = [
-        ("Category Focus", "Gun-Related", "is_gun_related"),
-        ("Category Focus", "Property Crime", "is_property_related"),
-        ("Category Focus", "Larceny", "is_larceny_related"),
+        ("Category Focus", focus_name, flag_col)
+        for focus_name, flag_col in CATEGORY_FOCUS_COLUMNS.items()
     ]
     summary_rows = []
     matrix_rows = []
@@ -2109,6 +2277,31 @@ def save_violent_14d_charts(by_type: pd.DataFrame, by_day_hour: pd.DataFrame, by
         plt.close()
 
 
+def build_spatial_daily_payload(df: pd.DataFrame, current_year: int, resolution: int = 8) -> pd.DataFrame:
+    """Compact current-year daily H3 records for browser-side custom spatial comparisons."""
+    if h3 is None:
+        return pd.DataFrame()
+    cols = ["incident_date", "incident_year", "latitude", "longitude", "precinct_norm", "neighborhood",
+            "offense_category", "nearest_intersection", "is_violent_crime", "is_property_crime", "is_vehicle_related"]
+    temp = df[[c for c in cols if c in df.columns]].copy()
+    temp = temp[temp["incident_year"].astype(int).eq(int(current_year))].dropna(subset=["incident_date", "latitude", "longitude"])
+    if temp.empty:
+        return pd.DataFrame()
+    temp["date"] = pd.to_datetime(temp["incident_date"]).dt.strftime("%Y-%m-%d")
+    temp["h3"] = [h3.latlng_to_cell(float(a), float(b), resolution) for a,b in zip(temp["latitude"], temp["longitude"])]
+    temp["precinct"] = temp["precinct_norm"].astype(str)
+    temp["crime"] = temp["offense_category"].fillna("Unknown").astype(str)
+    temp["neighborhood"] = temp["neighborhood"].fillna("Unknown").astype(str)
+    temp["intersection"] = temp.get("nearest_intersection", pd.Series("Unknown", index=temp.index)).fillna("Unknown").astype(str)
+    temp["violent"] = temp.get("is_violent_crime", False).fillna(False).astype(bool)
+    temp["property"] = temp.get("is_property_crime", False).fillna(False).astype(bool)
+    temp["vehicle"] = temp.get("is_vehicle_related", False).fillna(False).astype(bool)
+    keys=["date","h3","precinct","neighborhood","crime","violent","property","vehicle"]
+    def first_known(x):
+        y=x[x.ne("Unknown")]
+        return y.iloc[0] if not y.empty else "Unknown"
+    return temp.groupby(keys, as_index=False).agg(count=("crime","size"),lat=("latitude","median"),lon=("longitude","median"),intersection=("intersection",first_known))
+
 def build_hotspot_persistence_change(
     df: pd.DataFrame,
     current_year: int,
@@ -2173,10 +2366,11 @@ def build_hotspot_persistence_change(
 
     selection_specs = [
         ("All", "All", pd.Series(True, index=recent.index)),
-        ("Category Focus", "Gun-Related", recent["is_gun_related"].fillna(False)),
-        ("Category Focus", "Property Crime", recent["is_property_related"].fillna(False)),
-        ("Category Focus", "Larceny", recent["is_larceny_related"].fillna(False)),
     ]
+    selection_specs.extend(
+        ("Category Focus", focus_name, recent[flag_col].fillna(False))
+        for focus_name, flag_col in CATEGORY_FOCUS_COLUMNS.items()
+    )
     for crime_name in sorted(recent["offense_category"].dropna().astype(str).unique().tolist()):
         selection_specs.append(("Crime Type", crime_name, recent["offense_category"].astype(str).eq(crime_name)))
 
@@ -2280,9 +2474,8 @@ def build_hotspot_persistence_change(
 def build_category_hotspots(df: pd.DataFrame, resolution: int = 8) -> pd.DataFrame:
     pieces = []
     category_map = {
-        "Gun-Related": df[df["is_gun_related"]],
-        "Property Crime": df[df["is_property_related"]],
-        "Larceny": df[df["is_larceny_related"]],
+        focus_name: df[df[flag_col].fillna(False)]
+        for focus_name, flag_col in CATEGORY_FOCUS_COLUMNS.items()
     }
 
     for name, subset in category_map.items():
@@ -2872,10 +3065,324 @@ def save_combined_interactive_dashboard(
 
     Fullscreen(position="topright", title="Expand", title_cancel="Exit", force_separate_button=True).add_to(m)
 
-    # Detailed Analysis intentionally uses a lightweight basemap.
-    # Heavy spatial layers are provided by the separate Map Builder.
-    # This keeps the analytical dashboard small enough for GitHub Pages
-    # while preserving precinct/neighborhood navigation and analytical panels.
+    # Optional underlying event geography: latest 14 days only, so the layer remains
+    # useful and responsive instead of attempting to draw ~200k individual markers.
+    date_series = pd.to_datetime(df["incident_occurred_at"], errors="coerce", utc=True)
+    latest_date = date_series.max()
+    if pd.notna(latest_date):
+        recent_start = latest_date - pd.Timedelta(days=RECENT_WINDOW_DAYS - 1)
+        recent_points = df.loc[date_series.between(recent_start, latest_date)].copy()
+        recent_points = recent_points.dropna(subset=["latitude", "longitude"])
+        if not recent_points.empty:
+            recent_layer = folium.FeatureGroup(
+                name=f"Locations | Actual Incidents — Latest 14D ({len(recent_points):,})",
+                show=False,
+            )
+            FastMarkerCluster(
+                recent_points[["latitude", "longitude"]].astype(float).values.tolist(),
+                name="Recent Incident Locations",
+                disableClusteringAtZoom=16,
+            ).add_to(recent_layer)
+            recent_layer.add_to(m)
+
+    temp_time = df.copy()
+    temp_time["shift_window"] = temp_time["incident_hour_of_day"].apply(assign_shift_window)
+    temp_time["decision_purpose"] = temp_time["offense_category"].apply(assign_decision_purpose)
+
+    # Layer 1: all incidents heatmap
+    all_heat_layer = folium.FeatureGroup(name="Core | Incident Density Heatmap", show=True)
+    all_heat_data = df[["latitude", "longitude"]].values.tolist()
+    HeatMap(all_heat_data, radius=11, blur=13, max_zoom=15, min_opacity=0.18).add_to(all_heat_layer)
+    all_heat_layer.add_to(m)
+
+    # Layer 2: spike markers
+    spike_layer = folium.FeatureGroup(name="Core | Spike Week Markers", show=False)
+    cluster = MarkerCluster(name="Spike Marker Clusters")
+    if not spike_points.empty:
+        for _, row in spike_points.iterrows():
+            radius = max(6, min(20, row["incident_count"] * 0.8))
+            popup = (
+                f"Neighborhood: {row['neighborhood']}<br>"
+                f"Week Start: {row['week_start'].date()}<br>"
+                f"Incidents: {int(row['incident_count'])}<br>"
+                f"Spike Z-Score: {row['z_score']:.2f}"
+            )
+            folium.CircleMarker(
+                location=[row["latitude"], row["longitude"]],
+                radius=radius,
+                color="#b30000",
+                fill=True,
+                fill_opacity=0.55,
+                popup=popup,
+                ).add_to(cluster)
+            cluster.add_to(spike_layer)
+    spike_layer.add_to(m)
+
+    # Shared H3 cell assignment for choropleth layers.
+    temp = df.copy()
+    temp["h3_cell"] = temp.apply(
+        lambda row: h3.latlng_to_cell(float(row["latitude"]), float(row["longitude"]), resolution),
+        axis=1,
+    )
+
+    # Layer 3: incident count choropleth
+    cell_counts = (
+        temp.groupby("h3_cell", as_index=False)
+        .size()
+        .rename(columns={"size": "crime_count"})
+    )
+    location_lookup = build_h3_location_lookup(df, resolution)
+    cell_counts = cell_counts.merge(location_lookup, on="h3_cell", how="left")
+    count_vmin = float(cell_counts["crime_count"].min())
+    count_vmax = float(cell_counts["crime_count"].max())
+    count_colormap = cm.LinearColormap(
+        colors=["#f7fbff", "#6baed6", "#2171b5", "#08306b"],
+        vmin=count_vmin,
+        vmax=count_vmax,
+    )
+    count_colormap.caption = "Crime incidents per hex cell (core layer, all incidents)"
+    count_colormap.add_to(m)
+
+    count_features = []
+    for _, row in cell_counts.iterrows():
+        cell = row["h3_cell"]
+        count = int(row["crime_count"])
+        boundary = h3.cell_to_boundary(cell)
+        coordinates = [[lng, lat] for lat, lng in boundary]
+        if coordinates and coordinates[0] != coordinates[-1]:
+            coordinates.append(coordinates[0])
+
+        count_features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [coordinates]},
+                "properties": {
+                    "h3_cell": cell,
+                    "crime_count": count,
+                    "neighborhood": str(row.get("neighborhood", "Unknown")),
+                    "nearest_intersection": str(row.get("nearest_intersection", "Unknown")),
+                    "police_precinct": str(row.get("police_precinct", "Unknown")),
+                    "zip_code": str(row.get("zip_code", "Unknown")),
+                    "fill_color": count_colormap(count),
+                },
+            }
+        )
+
+    count_geojson = {"type": "FeatureCollection", "features": count_features}
+    count_layer = folium.FeatureGroup(name="Core | H3 Choropleth: Incident Count (All Incidents)", show=False)
+    folium.GeoJson(
+        count_geojson,
+        style_function=lambda feature: {
+            "fillColor": feature["properties"]["fill_color"],
+            "color": "#2b2b2b",
+            "weight": 0.22,
+            "fillOpacity": 0.34,
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=[
+                "neighborhood",
+                "nearest_intersection",
+                "police_precinct",
+                "zip_code",
+                "h3_cell",
+                "crime_count",
+            ],
+            aliases=[
+                "Neighborhood",
+                "Nearest Intersection",
+                "Precinct",
+                "ZIP",
+                "Grid ID",
+                "Crime Count",
+            ],
+            localize=True,
+        ),
+    ).add_to(count_layer)
+    count_layer.add_to(m)
+
+    # Layer 4: spike severity choropleth
+    spike_context = weekly[["neighborhood", "week_start", "z_score"]].copy()
+    temp_spike = df.merge(spike_context, on=["neighborhood", "week_start"], how="left")
+    temp_spike["z_score"] = temp_spike["z_score"].clip(lower=0)
+    temp_spike["h3_cell"] = temp_spike.apply(
+        lambda row: h3.latlng_to_cell(float(row["latitude"]), float(row["longitude"]), resolution),
+        axis=1,
+    )
+    severity = (
+        temp_spike.groupby("h3_cell", as_index=False)
+        .agg(spike_severity=("z_score", "mean"), incident_count=("z_score", "size"))
+    )
+    severity = severity.merge(location_lookup, on="h3_cell", how="left")
+    sev_vmin = float(severity["spike_severity"].min())
+    sev_vmax = float(severity["spike_severity"].max())
+    sev_colormap = cm.LinearColormap(
+        colors=["#fff5eb", "#fdae6b", "#e6550d", "#7f2704"],
+        vmin=sev_vmin,
+        vmax=sev_vmax,
+    )
+    sev_colormap.caption = "Average spike severity (mean positive z-score)"
+
+    sev_features = []
+    for _, row in severity.iterrows():
+        cell = row["h3_cell"]
+        spike_severity = float(row["spike_severity"])
+        incident_count = int(row["incident_count"])
+        boundary = h3.cell_to_boundary(cell)
+        coordinates = [[lng, lat] for lat, lng in boundary]
+        if coordinates and coordinates[0] != coordinates[-1]:
+            coordinates.append(coordinates[0])
+
+        sev_features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [coordinates]},
+                "properties": {
+                    "h3_cell": cell,
+                    "spike_severity": round(spike_severity, 3),
+                    "incident_count": incident_count,
+                    "neighborhood": str(row.get("neighborhood", "Unknown")),
+                    "nearest_intersection": str(row.get("nearest_intersection", "Unknown")),
+                    "police_precinct": str(row.get("police_precinct", "Unknown")),
+                    "zip_code": str(row.get("zip_code", "Unknown")),
+                    "fill_color": sev_colormap(spike_severity),
+                },
+            }
+        )
+
+    sev_geojson = {"type": "FeatureCollection", "features": sev_features}
+    sev_layer = folium.FeatureGroup(name="Core | H3 Choropleth: Spike Severity (All Incidents)", show=False)
+    folium.GeoJson(
+        sev_geojson,
+        style_function=lambda feature: {
+            "fillColor": feature["properties"]["fill_color"],
+            "color": "#2b2b2b",
+            "weight": 0.3,
+            "fillOpacity": 0.7,
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=[
+                "neighborhood",
+                "nearest_intersection",
+                "police_precinct",
+                "zip_code",
+                "h3_cell",
+                "spike_severity",
+                "incident_count",
+            ],
+            aliases=[
+                "Neighborhood",
+                "Nearest Intersection",
+                "Precinct",
+                "ZIP",
+                "Grid ID",
+                "Spike Severity",
+                "Incident Count",
+            ],
+            localize=True,
+        ),
+    ).add_to(sev_layer)
+    sev_layer.add_to(m)
+
+    add_marker_cluster_layer(
+        m,
+        focus_locations,
+        layer_name="Action | Focus Location Markers",
+        color="#7f1d1d",
+        rank_field="focus_rank",
+        top_n=80,
+        show=False,
+    )
+
+    # Layer 5+: decision-purpose layers (color-coded by operational response).
+    purpose_styles = {
+        "Preventive Patrol": {
+            "gradient": {0.25: "#dbeafe", 0.5: "#60a5fa", 0.75: "#2563eb", 1.0: "#1e3a8a"},
+            "label": "Decision | Preventive Patrol Priority",
+        },
+        "Investigations": {
+            "gradient": {0.25: "#f3e8ff", 0.5: "#c084fc", 0.75: "#9333ea", 1.0: "#581c87"},
+            "label": "Decision | Investigations Priority",
+        },
+        "Community Response": {
+            "gradient": {0.25: "#fee2e2", 0.5: "#f87171", 0.75: "#dc2626", 1.0: "#7f1d1d"},
+            "label": "Decision | Community Response Priority",
+        },
+    }
+
+    for purpose, style in purpose_styles.items():
+        subset = temp_time[temp_time["decision_purpose"] == purpose]
+        if subset.empty:
+            continue
+        layer = folium.FeatureGroup(
+            name=f"{style['label']} ({len(subset):,})",
+            show=False,
+        )
+        heat_data = subset[["latitude", "longitude"]].values.tolist()
+        HeatMap(
+            heat_data,
+            radius=11,
+            blur=14,
+            max_zoom=13,
+            gradient=style["gradient"],
+        ).add_to(layer)
+        layer.add_to(m)
+
+    # Layer 8+: top offense-category heatmaps.
+    offense_counts = df["offense_category"].value_counts()
+    if top_n_categories is not None:
+        offense_counts = offense_counts.head(top_n_categories)
+    for idx, category in enumerate(offense_counts.index.tolist()):
+        subset = df[df["offense_category"] == category]
+        if subset.empty:
+            continue
+        layer = folium.FeatureGroup(
+            name=f"Crime Type | {category} ({len(subset):,})",
+            show=False,
+        )
+        heat_data = subset[["latitude", "longitude"]].values.tolist()
+        HeatMap(heat_data, radius=10, blur=12, max_zoom=13).add_to(layer)
+        layer.add_to(m)
+
+    # Layer 12+: time-of-day heatmaps for deployment by shift.
+    for shift_name in [
+        "Day Shift (06:00-13:59)",
+        "Evening Shift (14:00-21:59)",
+        "Night Shift (22:00-05:59)",
+    ]:
+        subset = temp_time[temp_time["shift_window"] == shift_name]
+        if subset.empty:
+            continue
+        layer = folium.FeatureGroup(
+            name=f"Shift View | {shift_name} ({len(subset):,})",
+            show=False,
+        )
+        heat_data = subset[["latitude", "longitude"]].values.tolist()
+        HeatMap(heat_data, radius=10, blur=12, max_zoom=13).add_to(layer)
+        layer.add_to(m)
+
+    add_precinct_filter_layers(m, df)
+    add_focus_category_layers(m, df)
+    add_precinct_scope_heatmap_layers(m, df)
+    add_crime_type_h3_count_layers(m, df, resolution=resolution, top_n_categories=None)
+    for (neighborhood, precinct), scope_df in df.groupby(["neighborhood", "precinct_norm"], sort=True):
+        scope_specs = [("All Crime", scope_df)]
+        scope_specs.extend(
+            (f"Category Focus | {focus_name}", scope_df[scope_df[flag_col].fillna(False)])
+            for focus_name, flag_col in CATEGORY_FOCUS_COLUMNS.items()
+        )
+        scope_specs.extend(
+            (f"Crime Type | {category}", category_df)
+            for category, category_df in scope_df.groupby("offense_category", sort=True)
+        )
+        for category_label, category_df in scope_specs:
+            if category_df.empty:
+                continue
+            layer = folium.FeatureGroup(
+                name=f"Scope | Neighborhood | {neighborhood} | Precinct | {precinct} | {category_label}",
+                show=False,
+            )
+            HeatMap(category_df[["latitude", "longitude"]].values.tolist(), radius=10, blur=12, max_zoom=13).add_to(layer)
+            layer.add_to(m)
 
     # Bounds power precinct auto-zoom while preserving the real street basemap.
     precinct_bounds: dict[str, list[list[float]]] = {}
@@ -2897,6 +3404,8 @@ def save_combined_interactive_dashboard(
                 [float(g["latitude"].max()), float(g["longitude"].max())],
             ]
 
+    spatial_daily = build_spatial_daily_payload(df, current_year=current_year, resolution=resolution)
+
     add_top_selector_panel(
         m,
         sorted(df["precinct_norm"].dropna().astype(str).unique().tolist()),
@@ -2909,6 +3418,7 @@ def save_combined_interactive_dashboard(
         temporal_summary=temporal_summary,
         temporal_matrix=temporal_matrix,
         hotspot_change=hotspot_change,
+        spatial_daily=spatial_daily,
         precinct_bounds=precinct_bounds,
         neighborhood_bounds=neighborhood_bounds,
         current_year=current_year,
@@ -4646,6 +5156,19 @@ def save_operations_landing_html(
 
     daily_counts = build_daily_precinct_category_counts(temp, precincts)
     hourly_counts = build_hourly_precinct_category_counts(temp, precincts)
+    # Compact current-year H3/day records let the overview recompute focus locations
+    # and hotspot summaries for the exact custom comparison selected by the user.
+    overview_spatial_daily = build_spatial_daily_payload(temp, current_year=max_year, resolution=8)
+    overview_spatial_records = []
+    if overview_spatial_daily is not None and not overview_spatial_daily.empty:
+        for _, row in overview_spatial_daily.iterrows():
+            overview_spatial_records.append({
+                "date": str(row.get("date", "")), "h3": str(row.get("h3", "")),
+                "precinct": str(row.get("precinct", "")), "neighborhood": str(row.get("neighborhood", "Unknown")),
+                "crime": str(row.get("crime", "Unknown")), "count": int(row.get("count", 0) or 0),
+                "lat": clean_number(row.get("lat")), "lon": clean_number(row.get("lon")),
+                "intersection": str(row.get("intersection", "Unknown")),
+            })
 
     payload = {
         "city": city_data,
@@ -4654,6 +5177,7 @@ def save_operations_landing_html(
         "area_map_filename": area_map_filename,
         "daily_counts": daily_counts,
         "hourly_counts": hourly_counts,
+        "spatial_daily": overview_spatial_records,
     }
     payload_json = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     precinct_options = "".join(
@@ -4830,7 +5354,7 @@ th{{color:#475569;font-size:.76rem}} th:first-child,td:first-child{{text-align:l
       </div>
       <div class="note" id="rangeStatus"></div>
     </div>
-    <div class="note">By default, the dashboard compares the latest 14 days with the immediately preceding 14 days. A custom comparison recomputes recent activity, crime mix, priority concerns, decision-purpose workload, shift demand, and timing. Focus locations and hotspot change remain tied to the automated 14-day spatial pipeline.</div>
+    <div class="note" id="comparisonScopeNote">By default, operational sections compare the latest 14 days with the immediately preceding 14 days. When a custom comparison is applied, period-based sections use those selected dates consistently; matched-YTD sections remain YTD.</div>
     <div class="comparison-grid">
       <div><label for="rangePrevStart">Previous start</label><input type="date" id="rangePrevStart"></div>
       <div><label for="rangePrevEnd">Previous end</label><input type="date" id="rangePrevEnd"></div>
@@ -4852,7 +5376,7 @@ th{{color:#475569;font-size:.76rem}} th:first-child,td:first-child{{text-align:l
 
   <div class="section anchor-target" id="focusSection">
     <h2>Top 10 Operational Focus Locations</h2>
-    <div class="note">Highest-ranked focus cells inside the selected precinct only. Reflects the automated 14-day pipeline window; not affected by the custom date range filter.</div>
+    <div class="note" id="focusNote">Highest-activity spatial cells inside the selected precinct for the current analysis period. With a custom comparison, these locations are recomputed from the selected Current range.</div>
     <div id="focusLocations"></div>
   </div>
 
@@ -4873,23 +5397,24 @@ th{{color:#475569;font-size:.76rem}} th:first-child,td:first-child{{text-align:l
 
   <div class="section anchor-target" id="crimeSection">
     <h2>Dominant Crime Types — Selected Precinct</h2>
-    <div class="note">Full-period workload with current matched-YTD and recent 14-day direction beside it.</div>
+    <div class="note" id="crimeNote">Long-run and matched-YTD context are shown alongside the current operational period. When custom dates are applied, the recent columns use the selected Previous and Current ranges.</div>
     <div id="dominantCrimes"></div>
   </div>
 
   <div class="section anchor-target" id="prioritySection">
     <h2>Priority / Emerging Concerns</h2>
+    <div class="note" id="priorityNote">Compares offense-level activity in the current operational period with the preceding period, while retaining city and matched-YTD context.</div>
     <div id="concernsTable"></div>
   </div>
 
   <div class="grid2">
-    <div class="section anchor-target" id="shiftSection"><h2>Shift-Level Demand and Dominant Crime</h2><div class="note">Uses the automated 14-day window by default and recomputes for the selected custom current range.</div><div id="shiftSummary"></div></div>
-    <div class="section anchor-target" id="decisionSection"><h2>Decision-Purpose Workload and Dominant Crime</h2><div id="decisionSummary"></div></div>
+    <div class="section anchor-target" id="shiftSection"><h2>Shift-Level Demand and Dominant Crime</h2><div class="note" id="shiftNote">Shows when incidents occurred during the current operational period and the dominant crime within each shift.</div><div id="shiftSummary"></div></div>
+    <div class="section anchor-target" id="decisionSection"><h2>Decision-Purpose Workload and Dominant Crime</h2><div class="note" id="decisionNote">Groups incidents in the current operational period into broad response purposes using the dashboard's offense-to-purpose rules; it is an analytical grouping, not an official disposition.</div><div id="decisionSummary"></div></div>
   </div>
 
   <div class="grid2">
-    <div class="section anchor-target" id="timingSection"><h2>Recent Timing Snapshot</h2><div class="note">Uses the automated 14-day window by default and recomputes for the selected custom current range.</div><div id="timingSummary"></div></div>
-    <div class="section anchor-target" id="hotspotSection"><h2>Hotspot Change Snapshot</h2><div class="note">Reflects the automated 14-day pipeline window; not affected by the custom date range filter.</div><div id="hotspotSummary"></div></div>
+    <div class="section anchor-target" id="timingSection"><h2>Timing Snapshot</h2><div class="note" id="timingNote">Summarizes the peak day, hour, broad time block, and shift for the current operational period.</div><div id="timingSummary"></div></div>
+    <div class="section anchor-target" id="hotspotSection"><h2>Hotspot Change Snapshot</h2><div class="note" id="hotspotNote">Compares spatial concentration cells between the Previous and Current operational periods. Custom dates recompute these counts using the selected ranges.</div><div id="hotspotSummary"></div></div>
   </div>
 </div>
 </div>
@@ -4904,13 +5429,44 @@ function fmtShare(v){{if(v===null||v===undefined||Number.isNaN(Number(v)))return
 function pctClass(v){{if(v===null||v===undefined||Number.isNaN(Number(v)))return '';return Number(v)>2?'high':Number(v)<-2?'improving':'';}}
 function signalClass(s){{return s==='High Priority'?'high':s==='Emerging Concern'?'emerging':s==='Watch'?'watch':s==='Recent Improvement'?'improving':'';}}
 function hourLabel(h){{if(h===null||h===undefined||Number.isNaN(Number(h)))return '—';let n=Number(h),s=n>=12?'PM':'AM',h12=n%12||12;return h12+' '+s;}}
-function analysisUrl(p,section){{return '../Images/'+DATA.map_filename+'?precinct='+encodeURIComponent(p)+'&section='+encodeURIComponent(section);}}
+function analysisUrl(p,section){{
+ let u='../Images/'+DATA.map_filename+'?precinct='+encodeURIComponent(p)+'&section='+encodeURIComponent(section);
+ if(customRange){{u+='&prevStart='+encodeURIComponent(customRange.prevStart)+'&prevEnd='+encodeURIComponent(customRange.prevEnd)+'&currStart='+encodeURIComponent(customRange.currStart)+'&currEnd='+encodeURIComponent(customRange.currEnd);}}
+ return u;
+}}
 function assetLink(path,label){{return path?`<a href="${{path}}" target="_blank">${{label}}</a>`:'';}}
 
 const DECISION_PURPOSE_MAP={{'LARCENY':'Preventive Patrol','BURGLARY':'Preventive Patrol','STOLEN VEHICLE':'Preventive Patrol','STOLEN PROPERTY':'Preventive Patrol','ROBBERY':'Preventive Patrol','DAMAGE TO PROPERTY':'Preventive Patrol','FRAUD':'Investigations','FORGERY':'Investigations','EMBEZZLEMENT':'Investigations','ARSON':'Investigations','BRIBERY':'Investigations','ASSAULT':'Community Response','AGGRAVATED ASSAULT':'Community Response','WEAPONS OFFENSES':'Community Response','OBSTRUCTING THE POLICE':'Community Response','HOMICIDE':'Community Response','KIDNAPPING':'Community Response'}};
 function decisionPurposeFor(crime){{return DECISION_PURPOSE_MAP[String(crime||'').toUpperCase()]||'Preventive Patrol';}}
 
 const dailyCounts=DATA.daily_counts||{{precincts:[],categories:[],base_date:null,rows:[]}};
+const overviewSpatial=DATA.spatial_daily||[];
+function customSpatialCells(precinct,range){{
+ const cells={{}};
+ (overviewSpatial||[]).forEach(r=>{{
+  if(String(r.precinct)!==String(precinct))return;
+  const isPrev=r.date>=range.prevStart&&r.date<=range.prevEnd;
+  const isCurr=r.date>=range.currStart&&r.date<=range.currEnd;
+  if(!isPrev&&!isCurr)return;
+  const key=r.h3;if(!cells[key])cells[key]={{h3:key,prev:0,curr:0,lat:r.lat,lon:r.lon,neighborhood:r.neighborhood||'Unknown',intersection:r.intersection||'Unknown',crimes:{{}}}};
+  const c=cells[key];
+  if(isPrev)c.prev+=Number(r.count||0);
+  if(isCurr){{c.curr+=Number(r.count||0);c.crimes[r.crime]=(c.crimes[r.crime]||0)+Number(r.count||0);}}
+ }});
+ const arr=Object.values(cells);
+ const prevPositive=arr.map(c=>c.prev).filter(v=>v>0).sort((a,b)=>a-b);
+ const currPositive=arr.map(c=>c.curr).filter(v=>v>0).sort((a,b)=>a-b);
+ function q80(a){{if(!a.length)return 3;const i=Math.min(a.length-1,Math.floor(.8*(a.length-1)));return Math.max(3,a[i]);}}
+ const pt=q80(prevPositive),ct=q80(currPositive);
+ arr.forEach(c=>{{
+  const ph=c.prev>=pt,ch=c.curr>=ct;
+  c.status=(!ph&&ch)?(c.prev===0?'New Hotspot':'Emerging Hotspot'):(ph&&ch)?'Persistent Hotspot':(ph&&!ch)?'Declining Hotspot':'Not Hotspot';
+  let dom='—',mx=0;Object.keys(c.crimes).forEach(k=>{{if(c.crimes[k]>mx){{mx=c.crimes[k];dom=k;}}}});c.dominant=dom;c.dominant_count=mx;
+ }});
+ return arr;
+}}
+function customFocusRows(precinct,range){{return customSpatialCells(precinct,range).filter(c=>c.curr>0).sort((a,b)=>b.curr-a.curr).slice(0,10);}}
+function customHotspotCounts(precinct,range){{const out={{new:0,emerging:0,persistent:0,declining:0}};customSpatialCells(precinct,range).forEach(c=>{{if(c.status==='New Hotspot')out.new++;else if(c.status==='Emerging Hotspot')out.emerging++;else if(c.status==='Persistent Hotspot')out.persistent++;else if(c.status==='Declining Hotspot')out.declining++;}});return out;}}
 const dcPrecinctIdx={{}};(dailyCounts.precincts||[]).forEach((p,i)=>{{dcPrecinctIdx[p]=i;}});
 const dcBaseDate=dailyCounts.base_date?new Date(dailyCounts.base_date+'T00:00:00Z'):null;
 function dayOffsetFor(dateStr){{if(!dcBaseDate||!dateStr)return null;const d=new Date(dateStr+'T00:00:00Z');return Math.round((d-dcBaseDate)/86400000);}}
@@ -5154,10 +5710,10 @@ function renderPrecinct(p){{
  document.getElementById('precinctOverview').style.display='block';
  const ov=d.overall||{{}}, a=d.assets||{{}};
  document.getElementById('precinctTitle').textContent='Precinct '+p+' Operations Evaluation';
- document.getElementById('precinctDate').textContent='Matched YTD through '+(ov.comparison_date||city.data_through)+' · full data coverage '+city.min_year+'–'+city.max_year;
+ document.getElementById('precinctDate').textContent='RMS data available through '+city.data_through+' · matched YTD through '+(ov.comparison_date||city.data_through)+' · coverage '+city.min_year+'–'+city.max_year;
  document.getElementById('trendBadge').textContent=ov.improvement_status||'Trend unavailable';
 
- let rec, crimeRecordsOverride=null, concernsOverride=null, decisionOverride=null, shiftOverride=null, timingOverride=null;
+ let rec, crimeRecordsOverride=null, concernsOverride=null, decisionOverride=null, shiftOverride=null, timingOverride=null, focusOverride=null, hotspotOverride=null;
  const statusEl=document.getElementById('rangeStatus');
  if(customRange){{
   const prevStartOff=dayOffsetFor(customRange.prevStart),prevEndOff=dayOffsetFor(customRange.prevEnd);
@@ -5206,12 +5762,25 @@ function renderPrecinct(p){{
 
   shiftOverride=customShiftSummary(p,customRange.currStart,customRange.currEnd);
   timingOverride=customTimingSummary(p,customRange.currStart,customRange.currEnd);
+  focusOverride=customFocusRows(p,customRange);
+  hotspotOverride=customHotspotCounts(p,customRange);
 
   if(statusEl)statusEl.textContent='Custom range applied: '+customRange.currStart+' to '+customRange.currEnd+' vs '+customRange.prevStart+' to '+customRange.prevEnd+'.';
  }} else {{
   rec=d.recent||{{}};
   if(statusEl)statusEl.textContent='';
  }}
+ const periodLabel=customRange?(customRange.currStart+' to '+customRange.currEnd):'the latest automated 14-day period';
+ const comparisonLabel=customRange?(customRange.currStart+' to '+customRange.currEnd+' versus '+customRange.prevStart+' to '+customRange.prevEnd):'the latest 14 days versus the immediately preceding 14 days';
+ const noteText={{
+  focusNote:'Ranks the highest-activity spatial cells in Precinct '+p+' during '+periodLabel+'.',
+  crimeNote:'Shows long-run and matched-YTD context alongside '+(customRange?'the selected operational comparison ('+comparisonLabel+')':'the automated recent 14-day direction')+'.',
+  priorityNote:'Compares offense-level activity for '+comparisonLabel+', with city-period and matched-YTD context shown separately.',
+  shiftNote:'Shows incident demand by shift during '+periodLabel+' and the dominant crime within each shift.',
+  decisionNote:'Groups incidents during '+periodLabel+' into broad response purposes using the dashboard offense-to-purpose rules; this is an analytical grouping, not an official disposition.',
+  timingNote:'Summarizes peak day, hour, time block, and shift during '+periodLabel+'.',
+  hotspotNote:'Compares spatial concentration cells for '+comparisonLabel+'.'
+ }};Object.keys(noteText).forEach(id=>{{const el=document.getElementById(id);if(el)el.textContent=noteText[id];}});
 
  document.getElementById('precinctCards').innerHTML=`
  <div class="card"><div class="label">${{customRange?'Current custom range':'Current 14 days'}}</div><div class="value">${{fmtN(customRange?rec.current_28d:rec.current_14d)}}</div></div>
@@ -5250,10 +5819,12 @@ function renderPrecinct(p){{
    assetLink(analysisUrl(p,'hotspot'),'Hotspot Changes')
  ].filter(Boolean).join('');
 
- const fl=(d.focus_locations||[]).map(r=>[
-   fmtN(r.rank),r.neighborhood,r.intersection,fmtN(r.incident_count),r.dominant_offense,fmtShare(r.dominant_offense_share),Number(r.score||0).toFixed(3)
+ const fl=customRange?(focusOverride||[]).map((r,i)=>[
+   fmtN(i+1),r.neighborhood,r.intersection,fmtN(r.curr),r.dominant,fmtShare(r.curr?r.dominant_count/r.curr:null)
+ ]):(d.focus_locations||[]).map(r=>[
+   fmtN(r.rank),r.neighborhood,r.intersection,fmtN(r.incident_count),r.dominant_offense,fmtShare(r.dominant_offense_share)
  ]);
- document.getElementById('focusLocations').innerHTML=simpleTable(['Rank','Neighborhood','Nearest intersection','Incidents','Dominant crime','Share','Score'],fl);
+ document.getElementById('focusLocations').innerHTML=simpleTable(['Rank','Neighborhood','Nearest intersection','Incidents','Dominant crime','Share'],fl);
 
  const dep=d.deployment||{{}};
  document.getElementById('deploymentSummary').innerHTML=`<div class="metric-list">
@@ -5313,7 +5884,7 @@ function renderPrecinct(p){{
  if(timingView)document.getElementById('timingSummary').innerHTML=`<div class="metric-list"><div class="metric"><span class="note">Peak day</span><b>${{timingView.peak_day}}</b></div><div class="metric"><span class="note">Peak hour</span><b>${{hourLabel(timingView.peak_hour)}}</b></div><div class="metric"><span class="note">Busiest block</span><b>${{timingView.peak_time_block}}</b></div><div class="metric"><span class="note">Dominant shift</span><b>${{timingView.peak_shift}}</b></div></div>`;
  else document.getElementById('timingSummary').innerHTML='<div class="empty">Timing profile unavailable.</div>';
 
- const h=d.hotspots||{{new:0,emerging:0,persistent:0,declining:0}};
+ const h=hotspotOverride||d.hotspots||{{new:0,emerging:0,persistent:0,declining:0}};
  document.getElementById('hotspotSummary').innerHTML=`<div class="metric-list"><div class="metric"><span class="note">New</span><b>${{h.new}}</b></div><div class="metric"><span class="note">Emerging</span><b>${{h.emerging}}</b></div><div class="metric"><span class="note">Persistent</span><b>${{h.persistent}}</b></div><div class="metric"><span class="note">Declining</span><b>${{h.declining}}</b></div></div>`;
 }}
 
@@ -5327,6 +5898,8 @@ document.getElementById('rangeApplyBtn').addEventListener('click',()=>{{
  const statusEl=document.getElementById('rangeStatus');
  if(!ps||!pe||!cs||!ce){{if(statusEl)statusEl.textContent='Choose all four dates before applying.';return;}}
  if(ps>pe||cs>ce){{if(statusEl)statusEl.textContent='Each range needs a start on or before its end.';return;}}
+ const availableThrough=String(city.data_through||'').slice(0,10);
+ if(availableThrough && (pe>availableThrough||ce>availableThrough)){{if(statusEl)statusEl.textContent='Selected dates extend beyond the available RMS data. Data are available through '+availableThrough+'.';return;}}
  customRange={{prevStart:ps,prevEnd:pe,currStart:cs,currEnd:ce}};
  renderPrecinct(p);
 }});
