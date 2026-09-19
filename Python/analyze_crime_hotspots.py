@@ -930,14 +930,31 @@ def add_top_selector_panel(
           return scopedRecord(r) && r.precinct_norm===p && r.selection_type===scope.type && r.selection_name===scope.name;
         }});
       }}
+      function activeSpatialRange() {{
+        if(customSpatialRange) return customSpatialRange;
+        if(hotspotChangeData.length) {{
+          var r=hotspotChangeData[0];
+          if(r.current_14d_start&&r.current_14d_end) return {{
+            prevStart:r.previous_14d_start||'', prevEnd:r.previous_14d_end||'',
+            currStart:r.current_14d_start, currEnd:r.current_14d_end
+          }};
+        }}
+        return null;
+      }}
       function renderCustomSpatialHeatmap() {{
         var mp=window[mapObjectName]; if(!mp) return;
         if(customSpatialLayer){{try{{mp.removeLayer(customSpatialLayer);}}catch(e){{}} customSpatialLayer=null;}}
-        if(!customSpatialRange || !spatialDailyData.length) return;
+        if(!spatialDailyData.length) return;
         var precinct=(document.getElementById('cpPrecinctSelect')||{{value:''}}).value;
-        var scope=temporalScope(), neighborhood=selectedNeighborhood(), pts=[];
+        var scope=temporalScope(), neighborhood=selectedNeighborhood();
+        // The unfiltered default map keeps the compact all-history core heatmap.
+        // Any analytical scope is rendered on demand from the current-year daily payload,
+        // avoiding thousands of duplicated pre-generated Folium heatmap layers.
+        if(!customSpatialRange && !precinct && !neighborhood && scope.type==='All') return;
+        var range=activeSpatialRange(); if(!range) return;
+        var pts=[];
         spatialDailyData.forEach(function(r){{
-          if(r.date<customSpatialRange.currStart||r.date>customSpatialRange.currEnd)return;
+          if(r.date<range.currStart||r.date>range.currEnd)return;
           if(!rowMatchesSpatialScope(r,precinct,scope,neighborhood))return;
           if(Number.isFinite(Number(r.lat))&&Number.isFinite(Number(r.lon)))pts.push([Number(r.lat),Number(r.lon),Number(r.count||1)]);
         }});
@@ -3335,96 +3352,13 @@ def save_combined_interactive_dashboard(
         show=False,
     )
 
-    # Layer 5+: decision-purpose layers (color-coded by operational response).
-    purpose_styles = {
-        "Preventive Patrol": {
-            "gradient": {0.25: "#dbeafe", 0.5: "#60a5fa", 0.75: "#2563eb", 1.0: "#1e3a8a"},
-            "label": "Decision | Preventive Patrol Priority",
-        },
-        "Investigations": {
-            "gradient": {0.25: "#f3e8ff", 0.5: "#c084fc", 0.75: "#9333ea", 1.0: "#581c87"},
-            "label": "Decision | Investigations Priority",
-        },
-        "Community Response": {
-            "gradient": {0.25: "#fee2e2", 0.5: "#f87171", 0.75: "#dc2626", 1.0: "#7f1d1d"},
-            "label": "Decision | Community Response Priority",
-        },
-    }
-
-    for purpose, style in purpose_styles.items():
-        subset = temp_time[temp_time["decision_purpose"] == purpose]
-        if subset.empty:
-            continue
-        layer = folium.FeatureGroup(
-            name=f"{style['label']} ({len(subset):,})",
-            show=False,
-        )
-        heat_data = subset[["latitude", "longitude"]].values.tolist()
-        HeatMap(
-            heat_data,
-            radius=11,
-            blur=14,
-            max_zoom=13,
-            gradient=style["gradient"],
-        ).add_to(layer)
-        layer.add_to(m)
-
-    # Layer 8+: top offense-category heatmaps.
-    offense_counts = df["offense_category"].value_counts()
-    if top_n_categories is not None:
-        offense_counts = offense_counts.head(top_n_categories)
-    for idx, category in enumerate(offense_counts.index.tolist()):
-        subset = df[df["offense_category"] == category]
-        if subset.empty:
-            continue
-        layer = folium.FeatureGroup(
-            name=f"Crime Type | {category} ({len(subset):,})",
-            show=False,
-        )
-        heat_data = subset[["latitude", "longitude"]].values.tolist()
-        HeatMap(heat_data, radius=10, blur=12, max_zoom=13).add_to(layer)
-        layer.add_to(m)
-
-    # Layer 12+: time-of-day heatmaps for deployment by shift.
-    for shift_name in [
-        "Day Shift (06:00-13:59)",
-        "Evening Shift (14:00-21:59)",
-        "Night Shift (22:00-05:59)",
-    ]:
-        subset = temp_time[temp_time["shift_window"] == shift_name]
-        if subset.empty:
-            continue
-        layer = folium.FeatureGroup(
-            name=f"Shift View | {shift_name} ({len(subset):,})",
-            show=False,
-        )
-        heat_data = subset[["latitude", "longitude"]].values.tolist()
-        HeatMap(heat_data, radius=10, blur=12, max_zoom=13).add_to(layer)
-        layer.add_to(m)
-
-    add_precinct_filter_layers(m, df)
-    add_focus_category_layers(m, df)
-    add_precinct_scope_heatmap_layers(m, df)
-    add_crime_type_h3_count_layers(m, df, resolution=resolution, top_n_categories=None)
-    for (neighborhood, precinct), scope_df in df.groupby(["neighborhood", "precinct_norm"], sort=True):
-        scope_specs = [("All Crime", scope_df)]
-        scope_specs.extend(
-            (f"Category Focus | {focus_name}", scope_df[scope_df[flag_col].fillna(False)])
-            for focus_name, flag_col in CATEGORY_FOCUS_COLUMNS.items()
-        )
-        scope_specs.extend(
-            (f"Crime Type | {category}", category_df)
-            for category, category_df in scope_df.groupby("offense_category", sort=True)
-        )
-        for category_label, category_df in scope_specs:
-            if category_df.empty:
-                continue
-            layer = folium.FeatureGroup(
-                name=f"Scope | Neighborhood | {neighborhood} | Precinct | {precinct} | {category_label}",
-                show=False,
-            )
-            HeatMap(category_df[["latitude", "longitude"]].values.tolist(), radius=10, blur=12, max_zoom=13).add_to(layer)
-            layer.add_to(m)
+    # Scope-specific heatmaps are intentionally NOT pre-generated here.  The old
+    # implementation embedded the same incident coordinates repeatedly for every
+    # decision purpose, offense, shift, precinct, focus category, and neighborhood.
+    # With current RMS volume that inflated the single HTML file beyond GitHub's
+    # publishable size.  The selector panel now builds the selected precinct /
+    # neighborhood / crime-focus heatmap on demand from ``spatial_daily`` instead.
+    # This preserves analytical filtering while keeping one compact browser payload.
 
     # Bounds power precinct auto-zoom while preserving the real street basemap.
     precinct_bounds: dict[str, list[list[float]]] = {}
