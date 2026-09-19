@@ -458,6 +458,8 @@ def add_top_selector_panel(
         for _, row in spatial_daily.iterrows():
             spatial_daily_records.append({
                 "date": str(row.get("date", "")),
+                "weekday": str(row.get("weekday", "")),
+                "hour": int(row.get("hour", -1) or -1),
                 "h3": str(row.get("h3", "")),
                 "precinct": str(row.get("precinct", "")),
                 "neighborhood": str(row.get("neighborhood", "Unknown")),
@@ -622,15 +624,35 @@ def add_top_selector_panel(
     function scopedRecord(r) {{ var neighborhood=selectedNeighborhood(); return r.neighborhood_scope===(neighborhood||'ALL'); }}
     function overallFor(precinct) {{ return overallData[precinct+'|'+(selectedNeighborhood()||'ALL')]; }}
     function rowsFor(precinct, crime, trend) {{ return crimeTrendData.filter(function(r) {{ return scopedRecord(r) && (!precinct||r.precinct_norm===precinct) && (!crime||r.offense_category===crime) && trendMatches(r.trend_class,trend); }}); }}
-    function rows28For(precinct, crime) {{ return crime14dData.filter(function(r) {{ return scopedRecord(r) && (!precinct||r.precinct_norm===precinct) && (!crime||r.offense_category===crime); }}); }}
+    function rows28For(precinct, crime) {{
+      if(!customSpatialRange || !spatialDailyData.length) return crime14dData.filter(function(r) {{ return scopedRecord(r) && (!precinct||r.precinct_norm===precinct) && (!crime||r.offense_category===crime); }});
+      var neighborhood=selectedNeighborhood(), grouped={{}}, city={{}};
+      spatialDailyData.forEach(function(r) {{
+        if(neighborhood && r.neighborhood!==neighborhood) return;
+        if(crime && r.crime!==crime) return;
+        var isPrev=r.date>=customSpatialRange.prevStart&&r.date<=customSpatialRange.prevEnd, isCurr=r.date>=customSpatialRange.currStart&&r.date<=customSpatialRange.currEnd;
+        if(!isPrev&&!isCurr)return;
+        var key=(precinct?r.crime:r.precinct+'|'+r.crime), g=grouped[key]||(grouped[key]={{precinct_norm:r.precinct,offense_category:r.crime,previous_14d:0,current_14d:0}});
+        if(!precinct || r.precinct===precinct) {{ if(isPrev)g.previous_14d+=Number(r.count||0); if(isCurr)g.current_14d+=Number(r.count||0); }}
+        var c=city[r.crime]||(city[r.crime]={{previous:0,current:0}}); if(isPrev)c.previous+=Number(r.count||0); if(isCurr)c.current+=Number(r.count||0);
+      }});
+      return Object.values(grouped).filter(function(g){{return !precinct||g.precinct_norm===precinct;}}).map(function(g){{
+        var c=city[g.offense_category]||{{previous:0,current:0}}, ch=g.current_14d-g.previous_14d;
+        g.change_14d=ch; g.pct_change_14d=g.previous_14d>0?100*ch/g.previous_14d:(g.current_14d>0?null:0);
+        g.city_pct_change_14d=c.previous>0?100*(c.current-c.previous)/c.previous:(c.current>0?null:0);
+        g.recent_movement=g.pct_change_14d===null?(g.current_14d>0?'Increasing':'Stable'):(g.pct_change_14d>2?'Increasing':g.pct_change_14d<-2?'Decreasing':'Stable');
+        g.previous_14d_start=customSpatialRange.prevStart;g.previous_14d_end=customSpatialRange.prevEnd;g.current_14d_start=customSpatialRange.currStart;g.current_14d_end=customSpatialRange.currEnd;
+        return g;
+      }});
+    }}
       function recentClassName(t) {{ if(t==='Increasing') return 'trend-up'; if(t==='Decreasing') return 'trend-down'; return 'trend-stable'; }}
       function recentTableHtml(rows, firstCol, firstLabel, limit) {{
         var use=rows.slice(0,limit||12); if(!use.length) return '<div style="color:#64748b;">No 14-day comparison records for this selection.</div>';
-        var h='<table><thead><tr><th>'+firstLabel+'</th><th>Previous 14D</th><th>Current 14D</th><th>14D %chg</th><th>City %chg</th><th>Recent</th></tr></thead><tbody>';
+        var prevHead=customSpatialRange?'Previous Range':'Previous 14D', currHead=customSpatialRange?'Current Range':'Current 14D', chgHead=customSpatialRange?'Range %chg':'14D %chg'; var h='<table><thead><tr><th>'+firstLabel+'</th><th>'+prevHead+'</th><th>'+currHead+'</th><th>'+chgHead+'</th><th>City %chg</th><th>Recent</th></tr></thead><tbody>';
         use.forEach(function(r) {{ h+='<tr><td>'+r[firstCol]+'</td><td>'+fmtN(r.previous_14d)+'</td><td>'+fmtN(r.current_14d)+'</td><td>'+fmtPct(r.pct_change_14d)+'</td><td>'+fmtPct(r.city_pct_change_14d)+'</td><td class="'+recentClassName(r.recent_movement)+'">'+r.recent_movement+'</td></tr>'; }});
         return h+'</tbody></table>';
       }}
-      function recentWindowText(rows) {{ if(!rows.length) return ''; var r=rows[0]; return ' | Recent window '+r.current_14d_start+' to '+r.current_14d_end+' vs '+r.previous_14d_start+' to '+r.previous_14d_end; }}
+      function recentWindowText(rows) {{ if(!rows.length) return ''; var r=rows[0]; return ' | '+(customSpatialRange?'Selected range ':'Recent window ')+r.current_14d_start+' to '+r.current_14d_end+' vs '+r.previous_14d_start+' to '+r.previous_14d_end; }}
       function interpretationHtml(ytdRows, recentRows, precinct, crime) {{
         if(!ytdRows.length || !recentRows.length) return '';
         var y=ytdRows[0], r=recentRows[0];
@@ -659,10 +681,23 @@ def add_top_selector_panel(
         return h+'</tbody></table>';
       }}
       function priorityClassName(t) {{ if(t==='High Priority') return 'priority-high'; if(t==='Emerging Concern') return 'priority-emerging'; if(t==='Watch') return 'priority-watch'; if(t==='Recent Improvement') return 'priority-improving'; return 'trend-stable'; }}
-    function priorityRowsFor(precinct, crime) {{ return priorityData.filter(function(r) {{ return scopedRecord(r) && (!precinct||r.precinct_norm===precinct) && (!crime||r.offense_category===crime); }}); }}
+    function priorityRowsFor(precinct, crime) {{
+      var base=priorityData.filter(function(r) {{ return scopedRecord(r) && (!precinct||r.precinct_norm===precinct) && (!crime||r.offense_category===crime); }});
+      if(!customSpatialRange) return base;
+      var recent=rows28For(precinct,crime), lookup={{}}; recent.forEach(function(r){{lookup[r.precinct_norm+'|'+r.offense_category]=r;}});
+      return base.map(function(src){{var r=Object.assign({{}},src), d=lookup[r.precinct_norm+'|'+r.offense_category]; if(!d)return r;
+        r.previous_14d=d.previous_14d;r.current_14d=d.current_14d;r.change_14d=d.change_14d;r.pct_change_14d=d.pct_change_14d;r.city_pct_change_14d=d.city_pct_change_14d;
+        var volume=Number(r.current_14d||0), absChange=Number(r.change_14d||0), pct=r.pct_change_14d, cityGap=(pct===null||r.city_pct_change_14d===null)?0:pct-Number(r.city_pct_change_14d||0), ytd=Number(r.pct_change_vs_previous||0), zeroBaseline=Number(r.previous_14d||0)===0&&volume>0;
+        var high=(volume>=20)&&(absChange>=10)&&((pct!==null&&pct>=25)||zeroBaseline)&&((cityGap>=10)||(ytd>2));
+        var emerging=(volume>=10)&&(absChange>=5)&&((pct!==null&&pct>=10)||zeroBaseline)&&((cityGap>=5)||(ytd>2));
+        var watch=(volume>=5)&&(absChange>0)&&((pct!==null&&pct>2)||zeroBaseline); var improving=(volume>=5)&&(absChange<=-5)&&(pct!==null&&pct<=-10);
+        r.priority_signal=high?'High Priority':emerging?'Emerging Concern':watch?'Watch':improving?'Recent Improvement':'Monitor';
+        r.priority_score=volume+Math.max(absChange,0)*1.5+Math.max(pct||0,0)*0.08+Math.max(cityGap,0)*0.08+Math.max(ytd,0)*0.04; return r;
+      }});
+    }}
       function priorityTableHtml(rows, limit) {{
         var use=rows.slice(0,limit||8); if(!use.length) return '<div style="color:#64748b;margin-top:4px;">No priority signals for this selection.</div>';
-        var h='<table><thead><tr><th>Precinct / Crime</th><th>Prev 14D</th><th>Current 14D</th><th>Abs Δ</th><th>14D %chg</th><th>City %chg</th><th>YTD %chg</th><th>Score</th><th>Signal</th></tr></thead><tbody>';
+        var prevHead=customSpatialRange?'Prev Range':'Prev 14D', currHead=customSpatialRange?'Current Range':'Current 14D', chgHead=customSpatialRange?'Range %chg':'14D %chg'; var h='<table><thead><tr><th>Precinct / Crime</th><th>'+prevHead+'</th><th>'+currHead+'</th><th>Abs Δ</th><th>'+chgHead+'</th><th>City %chg</th><th>YTD %chg</th><th>Score</th><th>Signal</th></tr></thead><tbody>';
         use.forEach(function(r) {{ var label='P'+r.precinct_norm+' — '+r.offense_category; h+='<tr><td>'+label+'</td><td>'+fmtN(r.previous_14d)+'</td><td>'+fmtN(r.current_14d)+'</td><td>'+fmtN(r.change_14d)+'</td><td>'+fmtPct(r.pct_change_14d)+'</td><td>'+fmtPct(r.city_pct_change_14d)+'</td><td>'+fmtPct(r.pct_change_vs_previous)+'</td><td>'+Number(r.priority_score||0).toFixed(1)+'</td><td class="'+priorityClassName(r.priority_signal)+'">'+r.priority_signal+'</td></tr>'; }});
         return h+'</tbody></table>';
       }}
@@ -686,7 +721,7 @@ def add_top_selector_panel(
           var yrows=rowsFor(precinct,crime,''); var rrows=rows28For(precinct,crime);
           if(yrows.length) bullets.push('<b>Long-term:</b> '+crime+' is <span class="'+trendClassName(yrows[0].trend_class)+'">'+yrows[0].trend_class+'</span> YTD ('+fmtPct(yrows[0].pct_change_vs_previous)+' vs '+years.previous+').');
           if(rrows.length) {{
-            var rr=rrows[0]; bullets.push('<b>Recent:</b> '+fmtN(rr.previous_14d)+' → '+fmtN(rr.current_14d)+' in consecutive 14-day periods ('+fmtPct(rr.pct_change_14d)+'), versus '+fmtPct(rr.city_pct_change_14d)+' citywide.');
+            var rr=rrows[0]; bullets.push('<b>Recent:</b> '+fmtN(rr.previous_14d)+' → '+fmtN(rr.current_14d)+' in '+(customSpatialRange?'the selected comparison periods':'consecutive 14-day periods')+' ('+fmtPct(rr.pct_change_14d)+'), versus '+fmtPct(rr.city_pct_change_14d)+' citywide.');
             if(Number(rr.pct_change_14d)<-2) signal='IMPROVING'; else if(Number(rr.pct_change_14d)>2) signal='WORSENING';
           }}
         }} else if(precinct && scope.type==='All') {{
@@ -716,7 +751,7 @@ def add_top_selector_panel(
           var ne=hrows.filter(function(r){{return r.hotspot_status==='New Hotspot'||r.hotspot_status==='Emerging Hotspot';}}).length;
           var pe=hrows.filter(function(r){{return r.hotspot_status==='Persistent Hotspot';}}).length;
           var de=hrows.filter(function(r){{return r.hotspot_status==='Declining Hotspot';}}).length;
-          bullets.push('<b>Where:</b> '+ne+' new/emerging, '+pe+' persistent, and '+de+' declining hotspot cells in the latest 14-day comparison.');
+          bullets.push('<b>Where:</b> '+ne+' new/emerging, '+pe+' persistent, and '+de+' declining hotspot cells in the '+(customSpatialRange?'selected comparison':'latest 14-day comparison')+'.');
         }}
 
         if(!bullets.length) bullets.push('Choose a precinct and/or category/crime type to create a focused operational summary.');
@@ -779,14 +814,19 @@ def add_top_selector_panel(
         if(raw.startsWith('Category Focus | ')) return {{type:'Category Focus',name:raw.replace('Category Focus | ','')}};
         return {{type:'All',name:'All'}};
       }}
+      function customTimingRows(precinct,scope) {{
+        if(!customSpatialRange||!spatialDailyData.length)return null; var neighborhood=selectedNeighborhood(), rows=[];
+        spatialDailyData.forEach(function(r){{if(r.date<customSpatialRange.currStart||r.date>customSpatialRange.currEnd)return;if(!rowMatchesSpatialScope(r,precinct,scope,neighborhood))return;var h=Number(r.hour);if(!Number.isFinite(h)||h<0||h>23)return;rows.push(r);}}); return rows;
+      }}
       function timingSummary(period,precinct,scope) {{
-        var p=precinct||'ALL';
-        var rows=temporalSummaryData.filter(function(r){{return r.period===period && r.precinct_norm===p && r.selection_type===scope.type && r.selection_name===scope.name;}});
-        rows=rows.filter(scopedRecord); return rows.length?rows[0]:null;
+        if(period==='Recent 14D'&&customSpatialRange){{var rows=customTimingRows(precinct,scope)||[];if(!rows.length)return null;var day={{}},hour={{}},block={{}},shift={{}};
+          rows.forEach(function(r){{var n=Number(r.count||0),h=Number(r.hour);day[r.weekday]=(day[r.weekday]||0)+n;hour[h]=(hour[h]||0)+n;var b=h<6?'00:00-05:59':h<12?'06:00-11:59':h<18?'12:00-17:59':'18:00-23:59';block[b]=(block[b]||0)+n;var sh=(h>=6&&h<=13)?'Day Shift (06:00-13:59)':(h>=14&&h<=21)?'Evening Shift (14:00-21:59)':'Night Shift (22:00-05:59)';shift[sh]=(shift[sh]||0)+n;}});
+          function peak(o){{return Object.keys(o).sort(function(a,b){{return o[b]-o[a];}})[0];}} var pd=peak(day),ph=peak(hour),pb=peak(block),ps=peak(shift);return {{peak_day:pd,peak_day_count:day[pd],peak_hour:Number(ph),peak_hour_count:hour[ph],peak_time_block:pb,peak_time_block_count:block[pb],peak_shift:ps,peak_shift_count:shift[ps],period_start:customSpatialRange.currStart,period_end:customSpatialRange.currEnd}};}}
+        var p=precinct||'ALL'; var rows=temporalSummaryData.filter(function(r){{return r.period===period && r.precinct_norm===p && r.selection_type===scope.type && r.selection_name===scope.name;}}); rows=rows.filter(scopedRecord); return rows.length?rows[0]:null;
       }}
       function timingMatrix(period,precinct,scope) {{
-        var p=precinct||'ALL';
-        return temporalMatrixData.filter(function(r){{return scopedRecord(r) && r.period===period && r.precinct_norm===p && r.selection_type===scope.type && r.selection_name===scope.name;}});
+        if(period==='Recent 14D'&&customSpatialRange){{var rows=customTimingRows(precinct,scope)||[], out={{}};rows.forEach(function(r){{var h=Number(r.hour),b=h<6?'00:00-05:59':h<12?'06:00-11:59':h<18?'12:00-17:59':'18:00-23:59',k=r.weekday+'|'+b;out[k]=(out[k]||0)+Number(r.count||0);}});return Object.keys(out).map(function(k){{var a=k.split('|');return {{weekday:a[0],time_block:a[1],incident_count:out[k]}};}});}}
+        var p=precinct||'ALL'; return temporalMatrixData.filter(function(r){{return scopedRecord(r) && r.period===period && r.precinct_norm===p && r.selection_type===scope.type && r.selection_name===scope.name;}});
       }}
       function hourLabel(v) {{ if(v===null||v===undefined||Number.isNaN(Number(v))) return '—'; var h=Number(v); return String(h).padStart(2,'0')+':00'; }}
       function timingKpisHtml(r) {{
@@ -818,8 +858,8 @@ def add_top_selector_panel(
         var story='';
         if(recent) story='<div style="margin-top:6px;color:#0f172a;"><b>Recent timing signal:</b> '+recent.peak_day+' is the highest-volume day, '+recent.peak_time_block+' is the busiest time block, and the dominant shift is '+recent.peak_shift+'.</div>';
         card.innerHTML='<b>When is it happening? — '+label+'</b>'+
-          '<div style="margin-top:5px;color:#475569;"><b>Latest 14 days</b>'+recentRange+'</div>'+timingKpisHtml(recent)+story+
-          '<div style="margin-top:8px;color:#475569;"><b>Recent day × time concentration</b> <span style="font-weight:400;">(highest cell highlighted)</span></div>'+timingGridHtml(matrix)+
+          '<div style="margin-top:5px;color:#475569;"><b>'+(customSpatialRange?'Selected current range':'Latest 14 days')+'</b>'+recentRange+'</div>'+timingKpisHtml(recent)+story+
+          '<div style="margin-top:8px;color:#475569;"><b>'+(customSpatialRange?'Selected-range day × time concentration':'Recent day × time concentration')+'</b> <span style="font-weight:400;">(highest cell highlighted)</span></div>'+timingGridHtml(matrix)+
           '<div style="margin-top:8px;color:#475569;"><b>YTD timing context</b>'+(ytd?(' | '+ytd.period_start+' to '+ytd.period_end):'')+'</div>'+timingKpisHtml(ytd);
       }}
 
@@ -1082,7 +1122,7 @@ def add_top_selector_panel(
         setExclusiveByPrefix('Core Type | H3 Count | ', core.startsWith('Core Type | H3 Count | ')?core:'');
         zoomToPrecinct(precinct);
         var crimeLabel=category?category.replace('Category Focus | ','').replace('Crime Type | ',''):'All Crime';
-        setStatus([(precinct?'Precinct '+precinct:'Detroit Overview'),(neighborhood||'All Neighborhoods'),crimeLabel,(view==='Recent'?'Recent 14-Day Emphasis':view==='YTD'?'Matched YTD Emphasis':'Operational Summary')]);
+        setStatus([(precinct?'Precinct '+precinct:'Detroit Overview'),(neighborhood||'All Neighborhoods'),crimeLabel,(customSpatialRange?'Custom Range '+customSpatialRange.currStart+' to '+customSpatialRange.currEnd:view==='Recent'?'Recent 14-Day Emphasis':view==='YTD'?'Matched YTD Emphasis':'Operational Summary')]);
         renderKpis();
         renderExecutiveSummary();
         renderPriorityCard();
@@ -1137,7 +1177,7 @@ def add_top_selector_panel(
           var view=params.get('view')||'';
           var section=params.get('section')||'';
           var prevStart=params.get('prevStart')||'', prevEnd=params.get('prevEnd')||'', currStart=params.get('currStart')||'', currEnd=params.get('currEnd')||'';
-          if(prevStart&&prevEnd&&currStart&&currEnd) customSpatialRange={{prevStart:prevStart,prevEnd:prevEnd,currStart:currStart,currEnd:currEnd}};
+          if(prevStart&&prevEnd&&currStart&&currEnd&&prevStart<=prevEnd&&currStart<=currEnd) {{ var maxSpatial=spatialDailyData.length?spatialDailyData.reduce(function(m,r){{return r.date>m?r.date:m;}},''):''; if(!maxSpatial|| (prevEnd<=maxSpatial&&currEnd<=maxSpatial)) customSpatialRange={{prevStart:prevStart,prevEnd:prevEnd,currStart:currStart,currEnd:currEnd}}; else console.warn('Custom date range exceeds available dashboard data through '+maxSpatial); }}
           var psel=document.getElementById('cpPrecinctSelect');
           if(psel && precinct && Array.from(psel.options).some(function(o){{return o.value===precinct;}})) psel.value=precinct;
           var nsel=document.getElementById('cpNeighborhoodSelect');
@@ -2282,12 +2322,14 @@ def build_spatial_daily_payload(df: pd.DataFrame, current_year: int, resolution:
     if h3 is None:
         return pd.DataFrame()
     cols = ["incident_date", "incident_year", "latitude", "longitude", "precinct_norm", "neighborhood",
-            "offense_category", "nearest_intersection", "is_violent_crime", "is_property_crime", "is_vehicle_related"]
+            "offense_category", "nearest_intersection", "is_violent_crime", "is_property_crime", "is_vehicle_related", "incident_hour_of_day"]
     temp = df[[c for c in cols if c in df.columns]].copy()
     temp = temp[temp["incident_year"].astype(int).eq(int(current_year))].dropna(subset=["incident_date", "latitude", "longitude"])
     if temp.empty:
         return pd.DataFrame()
     temp["date"] = pd.to_datetime(temp["incident_date"]).dt.strftime("%Y-%m-%d")
+    temp["weekday"] = pd.to_datetime(temp["incident_date"]).dt.day_name()
+    temp["hour"] = pd.to_numeric(temp.get("incident_hour_of_day"), errors="coerce").fillna(-1).astype(int)
     temp["h3"] = [h3.latlng_to_cell(float(a), float(b), resolution) for a,b in zip(temp["latitude"], temp["longitude"])]
     temp["precinct"] = temp["precinct_norm"].astype(str)
     temp["crime"] = temp["offense_category"].fillna("Unknown").astype(str)
@@ -2296,7 +2338,7 @@ def build_spatial_daily_payload(df: pd.DataFrame, current_year: int, resolution:
     temp["violent"] = temp.get("is_violent_crime", False).fillna(False).astype(bool)
     temp["property"] = temp.get("is_property_crime", False).fillna(False).astype(bool)
     temp["vehicle"] = temp.get("is_vehicle_related", False).fillna(False).astype(bool)
-    keys=["date","h3","precinct","neighborhood","crime","violent","property","vehicle"]
+    keys=["date","weekday","hour","h3","precinct","neighborhood","crime","violent","property","vehicle"]
     def first_known(x):
         y=x[x.ne("Unknown")]
         return y.iloc[0] if not y.empty else "Unknown"
@@ -5803,7 +5845,7 @@ function renderPrecinct(p){{
  document.getElementById('topConcernQuick').textContent=quickConcern?(quickConcern.crime+' · '+quickConcern.signal):'No elevated signal';
  document.getElementById('timingQuick').textContent=timingForBrief?(timingForBrief.peak_day+' · '+hourLabel(timingForBrief.peak_hour)):'Timing unavailable';
 
- document.getElementById('buildMapBtn').href='../Images/'+DATA.area_map_filename+'?precinct='+encodeURIComponent(p);
+ document.getElementById('buildMapBtn').href=analysisUrl(p,'map');
  document.getElementById('classicLinks').innerHTML=[
    assetLink(analysisUrl(p,'map'),'Open Interactive Precinct Map'),
    assetLink(a.shift_chart,'Shift Summary Chart'),
@@ -5890,7 +5932,7 @@ function renderPrecinct(p){{
 
 function resetToCity(){{document.getElementById('cityPrompt').style.display='block';document.getElementById('precinctOverview').style.display='none';}}
 function clearCustomRange(){{customRange=null;const statusEl=document.getElementById('rangeStatus');if(statusEl)statusEl.textContent='';}}
-select.addEventListener('change',()=>{{clearCustomRange();let p=select.value;p?renderPrecinct(p):resetToCity();}});
+select.addEventListener('change',()=>{{let p=select.value;p?renderPrecinct(p):resetToCity();}});
 document.getElementById('rangeApplyBtn').addEventListener('click',()=>{{
  const p=select.value;if(!p)return;
  const ps=document.getElementById('rangePrevStart').value,pe=document.getElementById('rangePrevEnd').value;
