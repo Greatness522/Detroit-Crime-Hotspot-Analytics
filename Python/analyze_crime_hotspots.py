@@ -244,6 +244,8 @@ def add_top_selector_panel(
     precinct_improvement: pd.DataFrame | None = None,
     precinct_crime_trends: pd.DataFrame | None = None,
     precinct_crime_14d: pd.DataFrame | None = None,
+    category_focus_trends: pd.DataFrame | None = None,
+    category_focus_14d: pd.DataFrame | None = None,
     priority_concerns: pd.DataFrame | None = None,
     temporal_summary: pd.DataFrame | None = None,
     temporal_matrix: pd.DataFrame | None = None,
@@ -370,6 +372,34 @@ def add_top_selector_panel(
                 rec[col] = str(row.get(col, ""))
             crime_14d_records.append(rec)
 
+    category_focus_trend_records = []
+    if category_focus_trends is not None and not category_focus_trends.empty:
+        wanted_focus_trend = [
+            "neighborhood_scope", "selection_name", "precinct_norm", "offense_category",
+            "incidents_baseline", "incidents_previous", "incidents_current",
+            "pct_change_vs_previous", "pct_change_vs_baseline", "trend_class", "comparison_date",
+        ]
+        for _, row in category_focus_trends.iterrows():
+            rec = {col: clean_number(row.get(col)) for col in wanted_focus_trend}
+            for col in ["neighborhood_scope", "selection_name", "precinct_norm", "offense_category", "trend_class", "comparison_date"]:
+                rec[col] = str(row.get(col, ""))
+            category_focus_trend_records.append(rec)
+
+    category_focus_14d_records = []
+    if category_focus_14d is not None and not category_focus_14d.empty:
+        wanted_focus_14d = [
+            "neighborhood_scope", "selection_name", "precinct_norm", "offense_category",
+            "previous_14d", "current_14d", "pct_change_14d", "recent_movement",
+            "city_pct_change_14d", "previous_14d_start", "previous_14d_end",
+            "current_14d_start", "current_14d_end",
+        ]
+        for _, row in category_focus_14d.iterrows():
+            rec = {col: clean_number(row.get(col)) for col in wanted_focus_14d}
+            for col in ["neighborhood_scope", "selection_name", "precinct_norm", "offense_category", "recent_movement",
+                        "previous_14d_start", "previous_14d_end", "current_14d_start", "current_14d_end"]:
+                rec[col] = str(row.get(col, ""))
+            category_focus_14d_records.append(rec)
+
     priority_records = []
     if priority_concerns is not None and not priority_concerns.empty:
         wanted_priority = [
@@ -476,6 +506,8 @@ def add_top_selector_panel(
     overall_json = json.dumps(overall_data, ensure_ascii=False).replace("</", "<\\/")
     crime_trend_json = json.dumps(crime_trend_records, ensure_ascii=False).replace("</", "<\\/")
     crime_14d_json = json.dumps(crime_14d_records, ensure_ascii=False).replace("</", "<\\/")
+    category_focus_trend_json = json.dumps(category_focus_trend_records, ensure_ascii=False).replace("</", "<\\/")
+    category_focus_14d_json = json.dumps(category_focus_14d_records, ensure_ascii=False).replace("</", "<\\/")
     priority_json = json.dumps(priority_records, ensure_ascii=False).replace("</", "<\\/")
     temporal_summary_json = json.dumps(temporal_summary_records, ensure_ascii=False).replace("</", "<\\/")
     temporal_matrix_json = json.dumps(temporal_matrix_records, ensure_ascii=False).replace("</", "<\\/")
@@ -528,6 +560,15 @@ def add_top_selector_panel(
         padding:10px 12px; width:min(1240px, calc(100vw - 32px)); font-size:12px; color:#0f172a;
         box-shadow:0 4px 12px rgba(15,23,42,0.12); max-height:46vh; overflow:auto;
     ">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="font-weight:800;font-size:13px;">Dashboard Filters</div>
+        <button id="cpToggleFilters" type="button"
+          style="padding:5px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#0f172a;cursor:pointer;font-weight:700;">
+          Minimize Filters
+        </button>
+      </div>
+
+<div id="cpFilterContent">
       <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:end;">
         <div style="min-width:180px;flex:1;"><div style="font-weight:800;margin-bottom:4px;">Precinct / Responsibility</div>
           <select id="cpPrecinctSelect" style="width:100%;padding:7px;border:1px solid #94a3b8;border-radius:6px;font-weight:700;">
@@ -594,11 +635,35 @@ def add_top_selector_panel(
       </div>
       <div style="margin-top:4px;font-size:11px;color:#64748b;">YTD Trend uses the latest current-year incident date as the cutoff and compares the same calendar period in prior years. ±2% is treated as Stable. Recent movement compares the latest 14 days with the immediately preceding 14 days.</div>
     </div>
+    </div> 
     <script>
     (function() {{
+            var cpToggle=document.getElementById('cpToggleFilters');
+      var cpContent=document.getElementById('cpFilterContent');
+      var cpPanel=document.getElementById('cpPanel');
+
+      if(cpToggle && cpContent && cpPanel) {{
+        cpToggle.addEventListener('click', function() {{
+          var collapsed=cpContent.style.display==='none';
+
+          if(collapsed) {{
+            cpContent.style.display='';
+            cpToggle.textContent='Minimize Filters';
+            cpPanel.style.maxHeight='46vh';
+            cpPanel.style.width='min(1240px, calc(100vw - 32px))';
+          }} else {{
+            cpContent.style.display='none';
+            cpToggle.textContent='Show Filters';
+            cpPanel.style.maxHeight='none';
+            cpPanel.style.width='min(360px, calc(100vw - 32px))';
+          }}
+        }});
+      }}
       var overallData = {overall_json};
       var crimeTrendData = {crime_trend_json};
       var crime14dData = {crime_14d_json};
+      var categoryFocusTrendData = {category_focus_trend_json};
+      var categoryFocus14dData = {category_focus_14d_json};
       var priorityData = {priority_json};
       var temporalSummaryData = {temporal_summary_json};
       var temporalMatrixData = {temporal_matrix_json};
@@ -620,26 +685,10 @@ def add_top_selector_panel(
       function trendClassName(t) {{ if((t||'').includes('Improving')) return 'trend-down'; if((t||'').includes('Worsening')) return 'trend-up'; return 'trend-stable'; }}
       function trendMatches(actual, requested) {{ if(!requested) return true; if(requested==='Improving') return actual==='Improving'||actual==='Consistently Improving'; if(requested==='Worsening') return actual==='Worsening'||actual==='Consistently Worsening'; return actual===requested; }}
       function selectedCrime() {{ var raw=(document.getElementById('cpCategorySelect')||{{value:''}}).value; return raw.startsWith('Crime Type | ')?raw.replace('Crime Type | ',''):''; }}
-      function crimeMatchesScope(crime, scope) {{
-        crime=String(crime||'').toUpperCase();
-
-        if(scope.type==='All') return true;
-
-        if(scope.type==='Crime Type')
-          return crime===String(scope.name||'').toUpperCase();
-
-        if(scope.type==='Category Focus') {{
-          if(scope.name==='Violent Crime')
-            return ['HOMICIDE','SEXUAL ASSAULT','ROBBERY','AGGRAVATED ASSAULT','ASSAULT'].includes(crime);
-
-          if(scope.name==='Property Crime')
-            return ['BURGLARY','LARCENY','DAMAGE TO PROPERTY','ARSON'].includes(crime);
-
-          if(scope.name==='Vehicle-Related Crime')
-            return crime==='STOLEN VEHICLE' || crime==='LARCENY';
-        }}
-
-        return true;
+      function selectedCategoryFocus() {{ var raw=(document.getElementById('cpCategorySelect')||{{value:''}}).value; return raw.startsWith('Category Focus | ')?raw.replace('Category Focus | ',''):''; }}
+      function focusRows(data, precinct, focus) {{
+        var neighborhood=selectedNeighborhood()||'ALL';
+        return data.filter(function(r) {{ return r.neighborhood_scope===neighborhood && r.selection_name===focus && r.precinct_norm===(precinct||'ALL'); }});
       }}
     function selectedNeighborhood() {{ return (document.getElementById('cpNeighborhoodSelect')||{{value:''}}).value; }}
     function scopedRecord(r) {{ var neighborhood=selectedNeighborhood(); return r.neighborhood_scope===(neighborhood||'ALL'); }}
@@ -1080,15 +1129,7 @@ def add_top_selector_panel(
 
       function renderTrendCard() {{
         var precinct=(document.getElementById('cpPrecinctSelect')||{{value:''}}).value;
-        var scope=temporalScope();
-        var crime=selectedCrime(); var trend='';
-
-        function filterToActiveScope(rows) {{
-          return rows.filter(function(r) {{
-            return crimeMatchesScope(r.offense_category,scope);
-          }});
-        }}
-
+        var crime=selectedCrime(); var focus=selectedCategoryFocus(); var trend='';
         var card=document.getElementById('cpTrendCard'); if(!card) return;
         if(precinct && crime) {{
           var rows=rowsFor(precinct,crime,trend); var recent=rows28For(precinct,crime);
@@ -1098,10 +1139,19 @@ def add_top_selector_panel(
             interpretationHtml(rows,recent,precinct,crime);
           return;
         }}
+        if(focus) {{
+          var focusYtd=focusRows(categoryFocusTrendData,precinct,focus);
+          var focusRecent=focusRows(categoryFocus14dData,precinct,focus);
+          focusYtd.sort(function(a,b) {{ return Number(b.incidents_current||0)-Number(a.incidents_current||0); }});
+          focusRecent.sort(function(a,b) {{ return Number(b.current_14d||0)-Number(a.current_14d||0); }});
+          var title=(precinct?'Precinct '+precinct+' — ':'')+focus+' — Crime Type Breakdown';
+          card.innerHTML='<b>'+title+'</b>'+
+            '<div style="margin-top:5px;color:#475569;"><b>Matched YTD</b></div>'+tableHtml(focusYtd,'offense_category','Crime Type',15)+
+            '<div style="margin-top:8px;color:#475569;"><b>Recent movement</b>'+recentWindowText(focusRecent)+'</div>'+recentTableHtml(focusRecent,'offense_category','Crime Type',15);
+          return;
+        }}
         if(precinct) {{
-          var overall=overallFor(precinct);
-          var allRows=filterToActiveScope(rowsFor(precinct,'',trend));
-          var recentRows=filterToActiveScope(rows28For(precinct,''));
+          var overall=overallFor(precinct); var allRows=rowsFor(precinct,'',trend); var recentRows=rows28For(precinct,'');
           allRows.sort(function(a,b) {{ return Number(b.pct_change_vs_previous||0)-Number(a.pct_change_vs_previous||0); }});
           var topWorse=allRows.filter(function(r){{return (r.trend_class||'').includes('Worsening');}}).slice(0,5);
           var topBetter=allRows.filter(function(r){{return (r.trend_class||'').includes('Improving');}}).sort(function(a,b){{return Number(a.pct_change_vs_previous||0)-Number(b.pct_change_vs_previous||0);}}).slice(0,5);
@@ -1118,26 +1168,6 @@ def add_top_selector_panel(
               '<div style="margin-top:8px;color:#475569;"><b>Recent 14-day movement</b>'+recentWindowText(recentRows)+'</div>'+
               '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px;"><div><b>Largest recent increases</b>'+recentTableHtml(recentUp,'offense_category','Crime Type',5)+'</div><div><b>Largest recent decreases</b>'+recentTableHtml(recentDown,'offense_category','Crime Type',5)+'</div></div>';
           }}
-          return;
-        }}
-        if(scope.type==='Category Focus') {{
-          var rows=filterToActiveScope(rowsFor('','',trend));
-          var recent=filterToActiveScope(rows28For('',''));
-
-          rows.sort(function(a,b) {{
-            return Number(b.pct_change_vs_previous||0)-Number(a.pct_change_vs_previous||0);
-          }});
-
-          recent.sort(function(a,b) {{
-            return Number(b.pct_change_14d||0)-Number(a.pct_change_14d||0);
-          }});
-
-          card.innerHTML='<b>'+scope.name+' — Crime Type Breakdown</b>'+
-            '<div style="margin-top:5px;color:#475569;"><b>Matched YTD</b></div>'+
-            tableHtml(rows,'offense_category','Crime Type',15)+
-            '<div style="margin-top:8px;color:#475569;"><b>Recent movement</b>'+
-            recentWindowText(recent)+'</div>'+
-            recentTableHtml(recent,'offense_category','Crime Type',15);
           return;
         }}
         if(crime) {{
@@ -1833,6 +1863,53 @@ def build_precinct_improvement_table(
     counts["improvement_score"] = counts["improvement_score"].round(2)
 
     return counts.sort_values(["improvement_score", "incidents_current"], ascending=[False, False]).reset_index(drop=True)
+
+def build_category_focus_crime_breakdowns(
+    df: pd.DataFrame,
+    current_year: int,
+    previous_year: int,
+    baseline_year: int | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build offense breakdowns inside each category focus using the authoritative row-level flags."""
+    trend_frames = []
+    recent_frames = []
+
+    def add_scope(scope_df: pd.DataFrame, neighborhood_scope: str) -> None:
+        for focus_name, flag_col in CATEGORY_FOCUS_COLUMNS.items():
+            selected = scope_df[scope_df[flag_col].fillna(False)].copy()
+            if selected.empty:
+                continue
+            trend = build_precinct_crime_trend_table(
+                selected, current_year, previous_year, baseline_year
+            )
+            recent = build_precinct_crime_14d_comparison(selected, current_year)
+            city_selected = selected.copy()
+            city_selected["precinct_norm"] = "ALL"
+            city_trend = build_precinct_crime_trend_table(
+                city_selected, current_year, previous_year, baseline_year
+            )
+            city_recent = build_precinct_crime_14d_comparison(city_selected, current_year)
+            if not city_trend.empty:
+                trend = pd.concat([trend, city_trend], ignore_index=True)
+            if not city_recent.empty:
+                recent = pd.concat([recent, city_recent], ignore_index=True)
+            if not trend.empty:
+                trend_frames.append(
+                    trend.assign(selection_name=focus_name, neighborhood_scope=neighborhood_scope)
+                )
+            if not recent.empty:
+                recent_frames.append(
+                    recent.assign(selection_name=focus_name, neighborhood_scope=neighborhood_scope)
+                )
+
+    add_scope(df, "ALL")
+    for neighborhood, scoped in df.groupby("neighborhood", sort=True):
+        add_scope(scoped, str(neighborhood))
+
+    trends = pd.concat(trend_frames, ignore_index=True) if trend_frames else pd.DataFrame()
+    recent = pd.concat(recent_frames, ignore_index=True) if recent_frames else pd.DataFrame()
+    return trends, recent
+
 
 def build_precinct_crime_14d_comparison(
     df: pd.DataFrame,
@@ -3148,6 +3225,8 @@ def save_combined_interactive_dashboard(
     precinct_improvement: pd.DataFrame | None = None,
     precinct_crime_trends: pd.DataFrame | None = None,
     precinct_crime_14d: pd.DataFrame | None = None,
+    category_focus_trends: pd.DataFrame | None = None,
+    category_focus_14d: pd.DataFrame | None = None,
     priority_concerns: pd.DataFrame | None = None,
     temporal_summary: pd.DataFrame | None = None,
     temporal_matrix: pd.DataFrame | None = None,
@@ -3441,6 +3520,8 @@ def save_combined_interactive_dashboard(
         precinct_improvement=precinct_improvement,
         precinct_crime_trends=precinct_crime_trends,
         precinct_crime_14d=precinct_crime_14d,
+        category_focus_trends=category_focus_trends,
+        category_focus_14d=category_focus_14d,
         priority_concerns=priority_concerns,
         temporal_summary=temporal_summary,
         temporal_matrix=temporal_matrix,
@@ -6170,6 +6251,9 @@ def main() -> None:
         previous_year=previous_year,
         baseline_year=baseline_year,
     )
+    category_focus_trends, category_focus_14d = build_category_focus_crime_breakdowns(
+        df, current_year, previous_year, baseline_year
+    )
     priority_concerns = build_priority_emerging_concerns(
         precinct_crime_trends,
         precinct_crime_14d,
@@ -6306,6 +6390,8 @@ def main() -> None:
         precinct_improvement=precinct_improvement,
         precinct_crime_trends=precinct_crime_trends,
         precinct_crime_14d=precinct_crime_14d,
+        category_focus_trends=category_focus_trends,
+        category_focus_14d=category_focus_14d,
         priority_concerns=priority_concerns,
         temporal_summary=temporal_summary,
         temporal_matrix=temporal_matrix,
@@ -6360,3 +6446,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
