@@ -616,7 +616,7 @@ function renderPrecinct(p){
  document.getElementById('topConcernQuick').textContent=quickConcern?(quickConcern.crime+' · '+quickConcern.signal):'No elevated signal';
  document.getElementById('timingQuick').textContent=timingForBrief?(timingForBrief.peak_day+' · '+hourLabel(timingForBrief.peak_hour)):'Timing unavailable';
 
- document.getElementById('buildMapBtn').href=analysisUrl(p,'map');
+ document.getElementById('buildMapBtn').href='../Images/'+DATA.area_map_filename+'?precinct='+encodeURIComponent(p);
  document.getElementById('classicLinks').innerHTML=[
    assetLink(analysisUrl(p,'map'),'Open Interactive Precinct Map'),
    assetLink(a.shift_chart,'Shift Summary Chart'),
