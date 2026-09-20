@@ -528,6 +528,15 @@ def add_top_selector_panel(
         padding:10px 12px; width:min(1240px, calc(100vw - 32px)); font-size:12px; color:#0f172a;
         box-shadow:0 4px 12px rgba(15,23,42,0.12); max-height:46vh; overflow:auto;
     ">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="font-weight:800;font-size:13px;">Dashboard Filters</div>
+        <button id="cpToggleFilters" type="button"
+          style="padding:5px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#0f172a;cursor:pointer;font-weight:700;">
+          Minimize Filters
+        </button>
+      </div>
+
+<div id="cpFilterContent">
       <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:end;">
         <div style="min-width:180px;flex:1;"><div style="font-weight:800;margin-bottom:4px;">Precinct / Responsibility</div>
           <select id="cpPrecinctSelect" style="width:100%;padding:7px;border:1px solid #94a3b8;border-radius:6px;font-weight:700;">
@@ -594,8 +603,30 @@ def add_top_selector_panel(
       </div>
       <div style="margin-top:4px;font-size:11px;color:#64748b;">YTD Trend uses the latest current-year incident date as the cutoff and compares the same calendar period in prior years. ±2% is treated as Stable. Recent movement compares the latest 14 days with the immediately preceding 14 days.</div>
     </div>
+    </div> 
     <script>
     (function() {{
+            var cpToggle=document.getElementById('cpToggleFilters');
+      var cpContent=document.getElementById('cpFilterContent');
+      var cpPanel=document.getElementById('cpPanel');
+
+      if(cpToggle && cpContent && cpPanel) {{
+        cpToggle.addEventListener('click', function() {{
+          var collapsed=cpContent.style.display==='none';
+
+          if(collapsed) {{
+            cpContent.style.display='';
+            cpToggle.textContent='Minimize Filters';
+            cpPanel.style.maxHeight='46vh';
+            cpPanel.style.width='min(1240px, calc(100vw - 32px))';
+          }} else {{
+            cpContent.style.display='none';
+            cpToggle.textContent='Show Filters';
+            cpPanel.style.maxHeight='none';
+            cpPanel.style.width='min(360px, calc(100vw - 32px))';
+          }}
+        }});
+      }}
       var overallData = {overall_json};
       var crimeTrendData = {crime_trend_json};
       var crime14dData = {crime_14d_json};
