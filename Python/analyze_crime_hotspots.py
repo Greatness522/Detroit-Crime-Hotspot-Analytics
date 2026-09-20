@@ -694,6 +694,29 @@ def add_top_selector_panel(
     function scopedRecord(r) {{ var neighborhood=selectedNeighborhood(); return r.neighborhood_scope===(neighborhood||'ALL'); }}
     function overallFor(precinct) {{ return overallData[precinct+'|'+(selectedNeighborhood()||'ALL')]; }}
     function rowsFor(precinct, crime, trend) {{ return crimeTrendData.filter(function(r) {{ return scopedRecord(r) && (!precinct||r.precinct_norm===precinct) && (!crime||r.offense_category===crime) && trendMatches(r.trend_class,trend); }}); }}
+    function categoryFocusRecentRows(precinct, focus) {{
+      if(!customSpatialRange || !spatialDailyData.length) return focusRows(categoryFocus14dData,precinct,focus);
+      var neighborhood=selectedNeighborhood(), scope={{type:'Category Focus',name:focus}}, grouped={{}}, city={{}};
+      spatialDailyData.forEach(function(r) {{
+        if(neighborhood && r.neighborhood!==neighborhood) return;
+        if(!rowMatchesSpatialScope(r,'',scope,'')) return;
+        var isPrev=r.date>=customSpatialRange.prevStart&&r.date<=customSpatialRange.prevEnd, isCurr=r.date>=customSpatialRange.currStart&&r.date<=customSpatialRange.currEnd;
+        if(!isPrev&&!isCurr) return;
+        var c=city[r.crime]||(city[r.crime]={{previous:0,current:0}});
+        if(isPrev)c.previous+=Number(r.count||0); if(isCurr)c.current+=Number(r.count||0);
+        if(precinct && r.precinct!==precinct) return;
+        var g=grouped[r.crime]||(grouped[r.crime]={{precinct_norm:precinct||'ALL',offense_category:r.crime,previous_14d:0,current_14d:0}});
+        if(isPrev)g.previous_14d+=Number(r.count||0); if(isCurr)g.current_14d+=Number(r.count||0);
+      }});
+      return Object.values(grouped).map(function(g) {{
+        var c=city[g.offense_category]||{{previous:0,current:0}}, ch=g.current_14d-g.previous_14d;
+        g.change_14d=ch; g.pct_change_14d=g.previous_14d>0?100*ch/g.previous_14d:(g.current_14d>0?null:0);
+        g.city_pct_change_14d=c.previous>0?100*(c.current-c.previous)/c.previous:(c.current>0?null:0);
+        g.recent_movement=g.pct_change_14d===null?(g.current_14d>0?'Increasing':'Stable'):(g.pct_change_14d>2?'Increasing':g.pct_change_14d<-2?'Decreasing':'Stable');
+        g.previous_14d_start=customSpatialRange.prevStart;g.previous_14d_end=customSpatialRange.prevEnd;g.current_14d_start=customSpatialRange.currStart;g.current_14d_end=customSpatialRange.currEnd;
+        return g;
+      }});
+    }}
     function rows28For(precinct, crime) {{
       if(!customSpatialRange || !spatialDailyData.length) return crime14dData.filter(function(r) {{ return scopedRecord(r) && (!precinct||r.precinct_norm===precinct) && (!crime||r.offense_category===crime); }});
       var neighborhood=selectedNeighborhood(), grouped={{}}, city={{}};
@@ -1141,7 +1164,7 @@ def add_top_selector_panel(
         }}
         if(focus) {{
           var focusYtd=focusRows(categoryFocusTrendData,precinct,focus);
-          var focusRecent=focusRows(categoryFocus14dData,precinct,focus);
+          var focusRecent=categoryFocusRecentRows(precinct,focus);
           focusYtd.sort(function(a,b) {{ return Number(b.incidents_current||0)-Number(a.incidents_current||0); }});
           focusRecent.sort(function(a,b) {{ return Number(b.current_14d||0)-Number(a.current_14d||0); }});
           var title=(precinct?'Precinct '+precinct+' — ':'')+focus+' — Crime Type Breakdown';
