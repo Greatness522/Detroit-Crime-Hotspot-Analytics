@@ -528,15 +528,6 @@ def add_top_selector_panel(
         padding:10px 12px; width:min(1240px, calc(100vw - 32px)); font-size:12px; color:#0f172a;
         box-shadow:0 4px 12px rgba(15,23,42,0.12); max-height:46vh; overflow:auto;
     ">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <div style="font-weight:800;font-size:13px;">Dashboard Filters</div>
-        <button id="cpToggleFilters" type="button"
-          style="padding:5px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:#0f172a;cursor:pointer;font-weight:700;">
-          Minimize Filters
-        </button>
-      </div>
-
-<div id="cpFilterContent">
       <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:end;">
         <div style="min-width:180px;flex:1;"><div style="font-weight:800;margin-bottom:4px;">Precinct / Responsibility</div>
           <select id="cpPrecinctSelect" style="width:100%;padding:7px;border:1px solid #94a3b8;border-radius:6px;font-weight:700;">
@@ -603,30 +594,8 @@ def add_top_selector_panel(
       </div>
       <div style="margin-top:4px;font-size:11px;color:#64748b;">YTD Trend uses the latest current-year incident date as the cutoff and compares the same calendar period in prior years. ±2% is treated as Stable. Recent movement compares the latest 14 days with the immediately preceding 14 days.</div>
     </div>
-    </div> 
     <script>
     (function() {{
-            var cpToggle=document.getElementById('cpToggleFilters');
-      var cpContent=document.getElementById('cpFilterContent');
-      var cpPanel=document.getElementById('cpPanel');
-
-      if(cpToggle && cpContent && cpPanel) {{
-        cpToggle.addEventListener('click', function() {{
-          var collapsed=cpContent.style.display==='none';
-
-          if(collapsed) {{
-            cpContent.style.display='';
-            cpToggle.textContent='Minimize Filters';
-            cpPanel.style.maxHeight='46vh';
-            cpPanel.style.width='min(1240px, calc(100vw - 32px))';
-          }} else {{
-            cpContent.style.display='none';
-            cpToggle.textContent='Show Filters';
-            cpPanel.style.maxHeight='none';
-            cpPanel.style.width='min(360px, calc(100vw - 32px))';
-          }}
-        }});
-      }}
       var overallData = {overall_json};
       var crimeTrendData = {crime_trend_json};
       var crime14dData = {crime_14d_json};
@@ -651,6 +620,27 @@ def add_top_selector_panel(
       function trendClassName(t) {{ if((t||'').includes('Improving')) return 'trend-down'; if((t||'').includes('Worsening')) return 'trend-up'; return 'trend-stable'; }}
       function trendMatches(actual, requested) {{ if(!requested) return true; if(requested==='Improving') return actual==='Improving'||actual==='Consistently Improving'; if(requested==='Worsening') return actual==='Worsening'||actual==='Consistently Worsening'; return actual===requested; }}
       function selectedCrime() {{ var raw=(document.getElementById('cpCategorySelect')||{{value:''}}).value; return raw.startsWith('Crime Type | ')?raw.replace('Crime Type | ',''):''; }}
+      function crimeMatchesScope(crime, scope) {{
+        crime=String(crime||'').toUpperCase();
+
+        if(scope.type==='All') return true;
+
+        if(scope.type==='Crime Type')
+          return crime===String(scope.name||'').toUpperCase();
+
+        if(scope.type==='Category Focus') {{
+          if(scope.name==='Violent Crime')
+            return ['HOMICIDE','SEXUAL ASSAULT','ROBBERY','AGGRAVATED ASSAULT','ASSAULT'].includes(crime);
+
+          if(scope.name==='Property Crime')
+            return ['BURGLARY','LARCENY','DAMAGE TO PROPERTY','ARSON'].includes(crime);
+
+          if(scope.name==='Vehicle-Related Crime')
+            return crime==='STOLEN VEHICLE' || crime==='LARCENY';
+        }}
+
+        return true;
+      }}
     function selectedNeighborhood() {{ return (document.getElementById('cpNeighborhoodSelect')||{{value:''}}).value; }}
     function scopedRecord(r) {{ var neighborhood=selectedNeighborhood(); return r.neighborhood_scope===(neighborhood||'ALL'); }}
     function overallFor(precinct) {{ return overallData[precinct+'|'+(selectedNeighborhood()||'ALL')]; }}
@@ -1090,7 +1080,15 @@ def add_top_selector_panel(
 
       function renderTrendCard() {{
         var precinct=(document.getElementById('cpPrecinctSelect')||{{value:''}}).value;
+        var scope=temporalScope();
         var crime=selectedCrime(); var trend='';
+
+        function filterToActiveScope(rows) {{
+          return rows.filter(function(r) {{
+            return crimeMatchesScope(r.offense_category,scope);
+          }});
+        }}
+
         var card=document.getElementById('cpTrendCard'); if(!card) return;
         if(precinct && crime) {{
           var rows=rowsFor(precinct,crime,trend); var recent=rows28For(precinct,crime);
@@ -1101,7 +1099,9 @@ def add_top_selector_panel(
           return;
         }}
         if(precinct) {{
-          var overall=overallFor(precinct); var allRows=rowsFor(precinct,'',trend); var recentRows=rows28For(precinct,'');
+          var overall=overallFor(precinct);
+          var allRows=filterToActiveScope(rowsFor(precinct,'',trend));
+          var recentRows=filterToActiveScope(rows28For(precinct,''));
           allRows.sort(function(a,b) {{ return Number(b.pct_change_vs_previous||0)-Number(a.pct_change_vs_previous||0); }});
           var topWorse=allRows.filter(function(r){{return (r.trend_class||'').includes('Worsening');}}).slice(0,5);
           var topBetter=allRows.filter(function(r){{return (r.trend_class||'').includes('Improving');}}).sort(function(a,b){{return Number(a.pct_change_vs_previous||0)-Number(b.pct_change_vs_previous||0);}}).slice(0,5);
@@ -1118,6 +1118,26 @@ def add_top_selector_panel(
               '<div style="margin-top:8px;color:#475569;"><b>Recent 14-day movement</b>'+recentWindowText(recentRows)+'</div>'+
               '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:4px;"><div><b>Largest recent increases</b>'+recentTableHtml(recentUp,'offense_category','Crime Type',5)+'</div><div><b>Largest recent decreases</b>'+recentTableHtml(recentDown,'offense_category','Crime Type',5)+'</div></div>';
           }}
+          return;
+        }}
+        if(scope.type==='Category Focus') {{
+          var rows=filterToActiveScope(rowsFor('','',trend));
+          var recent=filterToActiveScope(rows28For('',''));
+
+          rows.sort(function(a,b) {{
+            return Number(b.pct_change_vs_previous||0)-Number(a.pct_change_vs_previous||0);
+          }});
+
+          recent.sort(function(a,b) {{
+            return Number(b.pct_change_14d||0)-Number(a.pct_change_14d||0);
+          }});
+
+          card.innerHTML='<b>'+scope.name+' — Crime Type Breakdown</b>'+
+            '<div style="margin-top:5px;color:#475569;"><b>Matched YTD</b></div>'+
+            tableHtml(rows,'offense_category','Crime Type',15)+
+            '<div style="margin-top:8px;color:#475569;"><b>Recent movement</b>'+
+            recentWindowText(recent)+'</div>'+
+            recentTableHtml(recent,'offense_category','Crime Type',15);
           return;
         }}
         if(crime) {{
